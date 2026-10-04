@@ -14,6 +14,7 @@ import type {
   EngineInterface,
   InputProps,
   MarkdownProps,
+  ModelForkResult,
   Register,
   RenderElement,
   TextProps,
@@ -30,7 +31,7 @@ import type {
 import { anchorFor, basename, cleanText, excerpt, parseBlocks, plainText, reanchor, titleOf } from './blocks'
 import { changedBlocks, diffText } from './diff'
 import { STORE_PREFIX, isSaved, keysToEvict, storeKey, toSaved } from './persist'
-import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildExplainPrompt, buildReviewPrompt } from './review-prompt'
+import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildExplainPrompt, buildReviewPrompt, buildStandaloneAskPrompt } from './review-prompt'
 
 const PLUGIN = 'spec-review'
 const PANE = 'spec-review'
@@ -485,7 +486,19 @@ async function ask($: EngineInterface, doc: SpecReviewDoc, block: SpecReviewBloc
   await update($, threadsA, list => [...list, thread])
   await update($, composerA, () => null)
 
-  const reply = await $.model.fork({ prompt: buildAskPrompt({ path: doc.path, block, question }) })
+  // Over the conversation's own transcript first: the model already has the
+  // document in context and the prefix is cached.
+  let reply: ModelForkResult = await $.model.fork({ prompt: buildAskPrompt({ path: doc.path, block, question }) })
+  let standaloneModel: string | undefined
+
+  // A fresh session, or one just cleared, has no reply to fork from. Then ask
+  // the session's model directly, with the whole document attached.
+  if (!reply.isAnswered && reply.reason === 'nothing-to-fork') {
+    standaloneModel = await $.session.model()
+    const { system, prompt } = buildStandaloneAskPrompt({ path: doc.path, title: doc.title, text: doc.text, block, question })
+    reply = await $.model.complete({ model: standaloneModel, system, prompt, maxTokens: 800, timeoutMs: 90000 })
+  }
+
   await update($, threadsA, list =>
     list.map((t): SpecReviewThread => {
       if (t.id !== thread.id) return t
@@ -496,14 +509,10 @@ async function ask($: EngineInterface, doc: SpecReviewDoc, block: SpecReviewBloc
           answer: cleanText(reply.text).trim(),
           outputTokens: reply.usage.output_tokens,
           cachedTokens: reply.usage.cache_read_input_tokens,
+          ...(standaloneModel ? { model: standaloneModel } : {}),
         }
       }
-      const why =
-        reply.reason === 'nothing-to-fork'
-          ? 'nothing to ask yet: the conversation has no reply to build on'
-          : reply.reason === 'api-error'
-            ? `API error${reply.status ? ` ${reply.status}` : ''} (${reply.error})`
-            : reply.reason
+      const why = reply.reason === 'api-error' ? `API error${reply.status ? ` ${reply.status}` : ''} (${reply.error})` : reply.reason
       return { ...t, status: 'failed', failure: why }
     }),
   )
@@ -726,6 +735,7 @@ function drawPane(
             <Text color="cyan" wrap="wrap">
               {th.kind === 'explain' ? 'ⓘ' : '?'} {th.question}
               {th.kind === 'explain' && th.model ? ` (${th.model})` : ''}
+              {th.kind === 'ask' && th.model ? ` (answered by ${th.model} from the document alone: the conversation had no reply yet)` : ''}
             </Text>
             {th.status === 'pending' && <Text dimColor>{th.kind === 'explain' ? 'explaining…' : 'asking…'}</Text>}
             {th.status === 'failed' && <Text color="red">could not ask: {th.failure ?? 'unknown'}</Text>}

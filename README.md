@@ -28,7 +28,9 @@ README covers what the mod does today and how to run it.
 - **Side questions via `model.fork`.** Asking a question runs one completion
   over the session's own transcript, so the model already has the spec in
   context and the answer never enters the conversation. Each answer shows its
-  output and cached token counts.
+  output and cached token counts. In a fresh session, or right after `/clear`,
+  there is no transcript to fork yet; the question then goes to the session's
+  model with the whole document attached, and the answer says so.
 - **One review, one revision.** Submitting sends all comments as a single
   prompt in your words, anchored by heading and quote. Approving sends the
   approval phrase, optionally with unsent comments folded in as non-blocking
@@ -136,7 +138,7 @@ narrower terminal the mod falls back to a toast and a status line pointing at
 
 ```
 claude plugin validate spec-review   # what the engine will load and refuse
-claude plugin test spec-review       # 24 tests, no terminal needed
+claude plugin test spec-review       # 25 tests, no terminal needed
 ```
 
 Type-checking: once the mod has loaded in a session, the engine lays this

@@ -45,7 +45,7 @@ export type SpecReviewThread = {
   kind: 'ask' | 'explain'
   question: string
   status: 'pending' | 'answered' | 'failed'
-  /** The model that answered an `explain` thread. */
+  /** The model that answered: set for an `explain` thread, and for an `ask` answered without the conversation. */
   model?: string
   answer?: string
   failure?: string

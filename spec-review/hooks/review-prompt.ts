@@ -91,3 +91,33 @@ export function buildExplainPrompt(args: { path: string; title: string; block: S
     ].join('\n'),
   }
 }
+
+const STANDALONE_DOC_CAP = 100_000
+
+/**
+ * A question asked before the conversation has a reply to fork from: the
+ * session's model sees the whole document instead.
+ */
+export function buildStandaloneAskPrompt(args: { path: string; title: string; text: string; block: SpecReviewBlock; question: string }): {
+  system: string
+  prompt: string
+} {
+  const text = args.text.length > STANDALONE_DOC_CAP ? `${args.text.slice(0, STANDALONE_DOC_CAP)}\n\n[document truncated for length]` : args.text
+  return {
+    system:
+      'You are helping a reviewer understand a software design document they are reading. Answer their question from the document given, concisely. Say so when the document does not settle the question. Do not propose edits unless asked; this is a side question during review.',
+    prompt: [
+      `The document "${args.title}" (\`${args.path}\`):`,
+      '',
+      '<document>',
+      text,
+      '</document>',
+      '',
+      `The reviewer's question is about one passage, ${describeBlock(args.block)}:`,
+      '',
+      ...args.block.text.split('\n').map(l => `> ${l}`),
+      '',
+      `Question: ${args.question}`,
+    ].join('\n'),
+  }
+}

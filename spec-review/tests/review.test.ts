@@ -230,12 +230,46 @@ test('a asks the model on the side through model.fork and shows the answer', asy
 
 test('a failed fork is reported on the thread, not thrown', async ($, on) => {
   standBeneath(on, { 'docs/plan.md': PLAN })
-  on('model.fork', () => ({ value: { isAnswered: false as const, reason: 'nothing-to-fork' as const } }))
+  on('model.fork', () => ({
+    value: { isAnswered: false as const, reason: 'api-error' as const, status: 529, error: 'overloaded' as const, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+  }))
   await runReview($, 'docs/plan.md')
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', props: PANE_PROPS, requestId: PANE })
   await ui.press({ key: 'ask' })
   await ui.input({ key: 'compose', text: 'Is this the final title?' })
-  expect(await ui.find({ type: 'Text', text: /could not ask: nothing to ask yet/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /could not ask: API error 529 \(overloaded\)/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('before the conversation has a reply, ask falls back to the session model with the whole document', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  on('model.fork', () => ({ value: { isAnswered: false as const, reason: 'nothing-to-fork' as const } }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  const completions: { model: string; system?: string; prompt: string }[] = []
+  on('model.complete', (_, e) => {
+    completions.push({ model: e.model, system: e.system, prompt: e.prompt })
+    return {
+      value: {
+        isAnswered: true as const,
+        text: 'The plan does not say; SQLite is only named as the per-user store.',
+        usage: { input_tokens: 700, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    }
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  for (let i = 0; i < 5; i += 1) await ui.press({ key: 'next' })
+  await ui.press({ key: 'ask' })
+  await ui.input({ key: 'compose', text: 'Why SQLite?' })
+
+  expect(completions).toHaveLength(1)
+  expect(completions[0]!.model).toBe('claude-opus-5-5')
+  expect(completions[0]!.prompt).toContain('<document>\n# Widget sync plan')
+  expect(completions[0]!.prompt).toContain('> Widgets live in a SQLite file per user.')
+  expect(completions[0]!.prompt).toContain('Question: Why SQLite?')
+  expect(await ui.find({ type: 'Markdown', text: /only named as the per-user store/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /answered by claude-opus-5-5 from the document alone/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: 'keep as comment' })).toBeDefined()
   await ui.unmount()
 })
 
