@@ -30,7 +30,7 @@ table maps each requirement to the primitive that covers it.
 | Keep notes without a model turn | `$.session.append({ message: { type: 'user', content } })` | A user-role row the model sees next turn; the person does not see it as typed. |
 | Remember comments across sessions | `$.store.get/set` | JSON, 4 MiB total. Key by document path. |
 | Read the file as it is now | `$.fs.read(path)`, `$.fs.stat` | Re-read after every `Write`/`Edit` to that path to refresh the pane. |
-| Manual entry point | `$.command.register({ name: 'review' })` + `on('command.run')` | `/review <path>` opens any markdown file. |
+| Manual entry point | `$.command.register({ name: 'spec-review' })` + `on('command.run')` | `/spec-review <path>` opens any markdown file. |
 | Confirmations | `$.ui.ask(question, options)`, `$.ui.toast`, `$.ui.status` | The engine's own AskUserQuestion dialog. |
 
 Two constraints shape the design more than anything else:
@@ -58,7 +58,7 @@ then revises the document in one pass instead of ping-ponging on each line.
    ends its turn with "Please review it".
 2. The mod has seen the `Write`, matched the path, and seen the review phrase
    in `turn.complete`. It opens the review pane focused (or, on a narrow
-   terminal, posts a toast and status line: `Spec ready: press /review`).
+   terminal, posts a toast and status line: `Spec ready: press /spec-review`).
 3. The pane shows the document rendered as markdown. Each block is a focus
    stop. The focused block is drawn with `inverse` or a left bar. A one-line
    legend sits at the bottom:
@@ -106,7 +106,7 @@ Every ask-mode exchange has three exits, drawn as plain Buttons under it:
 | Surface | What works | Degradation |
 | --- | --- | --- |
 | Terminal, fullscreen, 110+ cols | Docked pane beside the transcript, full keyboard flow | None |
-| Terminal, main screen or narrow | Inline pane above the prompt, `rows` requested | Below 144 cols the auto-open waits. Mod posts a toast and sets `$.ui.status('Spec ready: /review')`. `/review` is an asked open and is placed at any width. |
+| Terminal, main screen or narrow | Inline pane above the prompt, `rows` requested | Below 144 cols the auto-open waits. Mod posts a toast and sets `$.ui.status('Spec ready: /spec-review')`. `/spec-review` is an asked open and is placed at any width. |
 | Desktop app | Same as terminal plus `Client` for j/k | None |
 | VS Code | Pane, Buttons, Input | No `Client`, so no vim keys |
 | Mobile | Pane, Markdown, Buttons | No `Input`. Read and approve only, with `$.ui.ask` for a canned set of responses. |
@@ -128,7 +128,7 @@ Three signals, any one of which arms the offer; the offer fires on
 2. **Phrase match.** `e.answer` on `turn.complete` matches
    `/please review|review (the|this) (plan|spec|design)/i` and names a markdown
    path written this turn.
-3. **Explicit.** `/review <path>` or `/review` with no argument, which opens the
+3. **Explicit.** `/spec-review <path>` or `/spec-review` with no argument, which opens the
    most recently written matching document.
 
 Signal 1 alone is too eager (the model writes many markdown files). Signal 2
@@ -208,7 +208,7 @@ addition after a revision round.
 ## 8. Suggested build phases
 
 **Phase 1, usable in a day.**
-`/review <path>` command; auto-offer on path plus phrase match; pane that
+`/spec-review <path>` command; auto-offer on path plus phrase match; pane that
 parses the file into blocks and draws each as `Markdown` with a focus Button;
 Enter opens an `Input` under the block; `a` asks via `$.model.fork` and shows
 the answer under the block; `s` submits all comments as one prompt with
@@ -235,7 +235,7 @@ spec-review/
   hooks/register.tsx              hooks: tool.call, turn.complete, command.run,
                                   ui.render (Pane), ui.press, ui.input, prompt.submit
   hooks/blocks.ts                 markdown to blocks, anchors, re-anchoring
-  hooks/review-prompt.ts          builds the submitted review text
+  hooks/spec-review-prompt.ts          builds the submitted review text
   hooks/navigator.tsx             (phase 3) Client module for vim keys
   types/index.d.ts                PluginState contract: open doc, cursor, comments
   hooks/register.test.ts          claude plugin test
@@ -243,7 +243,7 @@ spec-review/
 
 ## 10. Open questions for the author
 
-- Should the review pane open automatically, or always wait for `/review`?
+- Should the review pane open automatically, or always wait for `/spec-review`?
   Auto-open is only reliable on wide fullscreen terminals, so a toast plus
   command may be the honest default everywhere.
 - Should ask-mode answers ever be visible to the main model? The default

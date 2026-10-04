@@ -17,8 +17,9 @@ README covers what the mod does today and how to run it.
   configured globs (superpowers' `docs/superpowers/specs/` and `plans/` by
   default) marks it as a candidate. When the model's turn ends with a review
   request, or names the file, the pane opens on it.
-- **`/review [path]`** opens any markdown file for review, or the most recent
-  candidate when no path is given.
+- **`/spec-review [path]`** opens any markdown file for review, or the most recent
+  candidate when no path is given. (Not `/review`: Claude Code's built-in
+  `/review` reviews pull requests.)
 - **Blocks, not lines.** The document is split into markdown blocks (heading,
   paragraph, list, code fence, table, quote). Each block is a focus stop.
 - **Comments are anchored by content.** A comment remembers the heading path
@@ -53,13 +54,13 @@ README covers what the mod does today and how to run it.
   default) to explain the current passage in plain words. It sees only the
   passage and the document's title, never the conversation, so it costs a few
   hundred tokens and leaves no trace in the transcript.
-- **Forget.** `/review forget [path]` clears a document's saved comments and
+- **Forget.** `/spec-review forget [path]` clears a document's saved comments and
   questions, in the pane and in the store.
 
 ## Keys in the pane
 
 The pane must hold the keyboard for hotkeys to work: it opens focused from
-`/review`, or press `ctrl+x tab` or click it.
+`/spec-review`, or press `ctrl+x tab` or click it.
 
 | Key | Action |
 | --- | --- |
@@ -100,7 +101,7 @@ saved edit hot-reloads the mod.
 Then open a spec:
 
 ```
-/review docs/superpowers/specs/2026-10-04-widgets-design.md
+/spec-review docs/superpowers/specs/2026-10-04-widgets-design.md
 ```
 
 Or just let superpowers finish a brainstorm or a plan; the pane offers itself.
@@ -113,14 +114,14 @@ settings.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `globs` | superpowers specs and plans, `docs/plans`, `*-design.md`, `*-plan.md`, `SPEC.md`, `PLAN.md` | Comma-separated globs of documents that count |
-| `offer` | `auto` | `auto` opens the pane when a review is asked for; `toast` only shows a toast and status line; `off` leaves it to `/review` |
+| `offer` | `auto` | `auto` opens the pane when a review is asked for; `toast` only shows a toast and status line; `off` leaves it to `/spec-review` |
 | `approvePhrase` | `Looks good, proceed.` | What `o` sends as your words |
 | `explainModel` | `haiku` | The model alias or id behind `h` |
 
 Note on `auto`: a pane opened without a user action is only placed on
 terminals 144 columns or wider (110 once you have opened it yourself). On a
 narrower terminal the mod falls back to a toast and a status line pointing at
-`/review`, which places the pane at any width.
+`/spec-review`, which places the pane at any width.
 
 ## Surfaces
 
@@ -152,9 +153,9 @@ spec-review/
   hooks/blocks.ts              markdown to blocks; anchors and re-anchoring
   hooks/diff.ts                line diff, unified hunks, changed-block detection
   hooks/persist.ts             the shape of the per-document store record
-  hooks/review-prompt.ts       the review, ask, escalation and approval texts
+  hooks/spec-review-prompt.ts       the review, ask, escalation and approval texts
   types/index.d.ts             the state contract ($.state under 'spec-review')
-  tests/review.test.ts         claude plugin test
+  tests/spec-review.test.ts         claude plugin test
 ```
 
 ## Deliberately not built

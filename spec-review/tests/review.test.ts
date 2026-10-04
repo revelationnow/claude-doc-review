@@ -87,7 +87,7 @@ function standBeneath(on: On, files: Record<string, string>, store: Record<strin
 
 async function runReview($: Engine, path: string) {
   return $.command.run({
-    command: 'review',
+    command: 'spec-review',
     args: path,
     origin: { kind: 'composer' },
     presentation: { isFullscreen: true, columns: 160 },
@@ -134,7 +134,7 @@ test('globs match the default spec and plan locations', () => {
   expect(design.test('a/b/foo-plan.md')).toBe(false)
 })
 
-test('/review opens the pane focused and draws the document', async ($, on) => {
+test('/spec-review opens the pane focused and draws the document', async ($, on) => {
   const { opened } = standBeneath(on, { 'docs/plan.md': PLAN })
 
   const ran = await runReview($, 'docs/plan.md')
@@ -150,10 +150,10 @@ test('/review opens the pane focused and draws the document', async ($, on) => {
   }
 })
 
-test('/review without a path reports usage', async ($, on) => {
+test('/spec-review without a path reports usage', async ($, on) => {
   standBeneath(on, {})
   const ran = await runReview($, '')
-  expect(ran.text).toContain('Usage: /review')
+  expect(ran.text).toContain('Usage: /spec-review')
   const missing = await runReview($, 'docs/missing.md')
   expect(missing.text).toContain('does not exist')
 })
@@ -474,7 +474,7 @@ test('a spec written this turn opens for review when the model asks for one', as
   expect(opened).toHaveLength(1)
 })
 
-test('with offer set to toast the pane stays closed and the status line points at /review', { options: { offer: 'toast' } }, async ($, on) => {
+test('with offer set to toast the pane stays closed and the status line points at /spec-review', { options: { offer: 'toast' } }, async ($, on) => {
   const files: Record<string, string> = {}
   const { opened, status } = standBeneath(on, files)
   on('tool.call', { tool: 'Write' }, (_, e) => {
@@ -486,7 +486,7 @@ test('with offer set to toast the pane stays closed and the status line points a
   await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/foo-plan.md', content: PLAN })
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 10, answer: 'Plan complete. Please review the plan.' })
   expect(opened).toHaveLength(0)
-  expect(status).toContain('spec ready: /review')
+  expect(status).toContain('spec ready: /spec-review')
 })
 
 // ---- phase 3 ----------------------------------------------------------------
@@ -595,7 +595,7 @@ test('the explain model is configurable', { options: { explainModel: 'sonnet' } 
   await ui.unmount()
 })
 
-test('/review forget clears the saved comments for a document', async ($, on) => {
+test('/spec-review forget clears the saved comments for a document', async ($, on) => {
   standBeneath(on, { 'docs/plan.md': PLAN, 'docs/other.md': '# Other\n\nUnrelated.\n' })
   await runReview($, 'docs/plan.md')
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })

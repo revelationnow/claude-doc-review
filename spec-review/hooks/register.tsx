@@ -34,7 +34,8 @@ import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildExplai
 
 const PLUGIN = 'spec-review'
 const PANE = 'spec-review'
-const COMMAND = 'review'
+// Not `review`: Claude Code has a built-in /review for pull requests.
+const COMMAND = 'spec-review'
 
 const DEFAULT_GLOBS =
   'docs/superpowers/specs/**/*.md,docs/superpowers/plans/**/*.md,docs/plans/**/*.md,docs/specs/**/*.md,**/*-design.md,**/*-plan.md,SPEC.md,PLAN.md'
