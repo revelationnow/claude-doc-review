@@ -3,7 +3,10 @@
 export type SpecReviewBlockKind =
   | 'heading'
   | 'paragraph'
+  /** A whole list: what an earlier version made; lists now split into items. */
   | 'list'
+  /** One list item, its nested items excluded (each is a block of its own). */
+  | 'item'
   | 'code'
   | 'table'
   | 'quote'
@@ -19,6 +22,8 @@ export type SpecReviewBlock = {
   endLine: number
   /** Headings above this block, outermost first; a heading block includes itself. */
   headingPath: string[]
+  /** For an item: how deeply it nests, 0 at the list's top level. */
+  depth?: number
 }
 
 /** Where a comment belongs, independent of line numbers. */
@@ -75,6 +80,8 @@ export type SpecReviewDoc = {
   lastReviewAt: number | null
   /** The last find: its text and the blocks it matches, in order. */
   search: { query: string; matches: number[] } | null
+  /** Columns the focused table or code block is scrolled right by; 0 when the cursor moves. */
+  pan?: number
 }
 
 /** One document's record in `$.store`, kept across sessions. */

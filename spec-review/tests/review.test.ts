@@ -2,13 +2,13 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, RenderPropsOf } from 'claude-code'
 
-import { parseBlocks, reanchor, anchorFor, describeBlock } from '../hooks/blocks'
+import { parseBlocks, reanchor, anchorFor, describeBlock, normalizeQuote, tableGrid } from '../hooks/blocks'
 import { globToRegExp } from '../hooks/register'
 import { diffLines, unifiedHunks, diffText, changedBlocks } from '../hooks/diff'
 
 const PLUGIN = 'spec-review'
 const PANE = 'spec-review'
-const SURFACES = ['terminal', 'desktop'] as const
+const SURFACES = ['terminal', 'desktop', 'vscode'] as const
 
 const PLAN = `# Widget sync plan
 
@@ -98,7 +98,7 @@ test('markdown splits into blocks with heading paths', () => {
   const blocks = parseBlocks(PLAN)
   const kinds = blocks.map(b => b.kind)
   expect(kinds).toEqual([
-    'heading', 'heading', 'paragraph', 'heading', 'heading', 'paragraph', 'list', 'heading', 'code', 'table', 'heading', 'paragraph',
+    'heading', 'heading', 'paragraph', 'heading', 'heading', 'paragraph', 'item', 'item', 'heading', 'code', 'table', 'heading', 'paragraph',
   ])
   const storage = blocks.find(b => b.text.startsWith('Widgets live'))
   expect(storage?.headingPath).toEqual(['Widget sync plan', 'Architecture', 'Storage'])
@@ -144,7 +144,7 @@ test('/spec-review opens the pane focused and draws the document', async ($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', props: PANE_PROPS, requestId: PANE })
     expect(await ui.find({ type: 'Markdown', text: /Widgets live in a SQLite file/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /block 1\/12/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /block 1\/13/ })).toBeDefined()
     expect((await ui.findAll({ type: 'Button' })).length).toBeGreaterThan(12)
     await ui.unmount()
   }
@@ -166,9 +166,9 @@ test('j and k move the cursor; a comment pins under the block; s submits one rev
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', props: PANE_PROPS, requestId: PANE })
 
     for (let i = 0; i < 5; i += 1) await ui.press({ key: 'next' })
-    expect(await ui.find({ type: 'Text', text: /block 6\/12/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /block 6\/13/ })).toBeDefined()
     await ui.press({ key: 'prev' })
-    expect(await ui.find({ type: 'Text', text: /block 5\/12/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /block 5\/13/ })).toBeDefined()
     await ui.press({ key: 'next' })
 
     await ui.press({ key: 'comment' })
@@ -316,7 +316,7 @@ test('a revision of the open file re-anchors comments and marks the lost ones', 
   for (let i = 0; i < 5; i += 1) await ui.press({ key: 'next' })
   await ui.press({ key: 'comment' })
   await ui.input({ key: 'compose', text: 'Name the SQLite file.' })
-  for (let i = 0; i < 6; i += 1) await ui.press({ key: 'next' })
+  for (let i = 0; i < 7; i += 1) await ui.press({ key: 'next' })
   await ui.press({ key: 'comment' })
   await ui.input({ key: 'compose', text: 'Quantify the skew.' })
   expect(await ui.find({ type: 'Text', text: /2 comments/ })).toBeDefined()
@@ -420,9 +420,9 @@ test('a revision after a submitted review shows a diff, marks changed blocks, an
   expect((await ui.findAll({ type: 'Button', text: '+' })).length).toBe(1) // the title is the cursor's block, drawn as ▶
 
   await ui.press({ key: 'next-change' })
-  expect(await ui.find({ type: 'Text', text: /block 12\/13/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 13\/14/ })).toBeDefined()
   await ui.press({ key: 'next-change' })
-  expect(await ui.find({ type: 'Text', text: /block 1\/13/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 1\/14/ })).toBeDefined()
 
   await ui.press({ key: 'diff' })
   const code = await ui.findAll({ type: 'Code' })
@@ -434,7 +434,7 @@ test('a revision after a submitted review shows a diff, marks changed blocks, an
   expect(await ui.find({ type: 'Text', text: /\+3 −1 lines/ })).toBeDefined()
 
   await ui.press({ key: 'reviewed' })
-  expect(await ui.find({ type: 'Code' })).toBeUndefined()
+  expect((await ui.findAll({ type: 'Code' })).filter(c => c.props.format === 'diff')).toEqual([])
   expect(await ui.find({ type: 'Text', text: /Revision 1 marked as reviewed/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', key: 'diff' })).toBeUndefined()
   await ui.unmount()
@@ -537,23 +537,23 @@ test('f finds blocks by text, cycles through the matches, and e goes to the end'
   // The title matches and holds the cursor, so the first match is the current block.
   expect(await ui.find({ type: 'Text', text: /find "widget" 1\/3/ })).toBeDefined()
   await ui.press({ key: 'find' })
-  expect(await ui.find({ type: 'Text', text: /block 3\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 3\/13/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /find "widget" 2\/3/ })).toBeDefined()
   await ui.press({ key: 'find' })
-  expect(await ui.find({ type: 'Text', text: /block 6\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 6\/13/ })).toBeDefined()
   await ui.press({ key: 'find' })
-  expect(await ui.find({ type: 'Text', text: /block 1\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 1\/13/ })).toBeDefined()
 
   await ui.press({ key: 'find-clear' })
   expect(await ui.find({ type: 'Text', text: /find "widget"/ })).toBeUndefined()
 
   await ui.press({ key: 'end' })
-  expect(await ui.find({ type: 'Text', text: /block 12\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 13\/13/ })).toBeDefined()
 
   // A find with no match leaves the cursor where it was.
   await ui.press({ key: 'find' })
   await ui.input({ key: 'find', text: 'kubernetes' })
-  expect(await ui.find({ type: 'Text', text: /block 12\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 13\/13/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /no matches/ })).toBeDefined()
   await ui.unmount()
 })
@@ -563,20 +563,20 @@ test('m cycles through the blocks that carry comments', async ($, on) => {
   await runReview($, 'docs/plan.md')
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', props: PANE_PROPS, requestId: PANE })
   await ui.press({ key: 'next-comment' }) // nothing yet: a toast, no move
-  expect(await ui.find({ type: 'Text', text: /block 1\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 1\/13/ })).toBeDefined()
 
-  await ui.press({ key: 'b:2' })
+  await ui.press({ key: 'act-c:2' })
   await ui.input({ key: 'compose', text: 'Which devices?' })
-  await ui.press({ key: 'b:5' })
+  await ui.press({ key: 'act-c:5' })
   await ui.input({ key: 'compose', text: 'Name the file.' })
   await ui.press({ key: 'top' })
 
   await ui.press({ key: 'next-comment' })
-  expect(await ui.find({ type: 'Text', text: /block 3\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 3\/13/ })).toBeDefined()
   await ui.press({ key: 'next-comment' })
-  expect(await ui.find({ type: 'Text', text: /block 6\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 6\/13/ })).toBeDefined()
   await ui.press({ key: 'next-comment' })
-  expect(await ui.find({ type: 'Text', text: /block 3\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 3\/13/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -651,4 +651,271 @@ test('/spec-review forget clears the saved comments for a document', async ($, o
 
   const none = await runReview($, 'forget docs/nowhere.md')
   expect(none.text).toContain('cleared the saved comments and questions for docs/nowhere.md')
+})
+
+/** A wide block's visible columns: "columns 41–88 of 102" in words, "41–88/102" beside a scrollbar. */
+function span(from: number, to: number, of: number): RegExp {
+  return new RegExp(`${from}–${to}(?: of |/)${of}`)
+}
+
+// ---- list items and unwrapped blocks ----------------------------------------
+
+const LISTS = `# Rollout
+
+1. Ship behind a flag
+   with a kill switch
+   - flag named \`sync_v2\`
+     - default off
+   - owned by sync team
+2. Ramp to 10%
+
+   Watch error rates for a day.
+3. Ramp to 100%
+
+After the list.
+`
+
+test('each list item is a block of its own, nested items one level deeper', () => {
+  const blocks = parseBlocks(LISTS)
+  const items = blocks.filter(b => b.kind === 'item')
+  expect(items.map(b => [b.depth, b.text])).toEqual([
+    [0, '1. Ship behind a flag\n   with a kill switch'],
+    [1, '- flag named `sync_v2`'],
+    [2, '- default off'],
+    [1, '- owned by sync team'],
+    [0, '2. Ramp to 10%\n\n   Watch error rates for a day.'],
+    [0, '3. Ramp to 100%'],
+  ])
+  expect(items[2]?.startLine).toBe(6)
+  expect(blocks[blocks.length - 1]?.kind).toBe('paragraph')
+  expect(describeBlock(items[3]!)).toContain('the list item beginning "owned by sync team"')
+})
+
+test('a comment made on a whole list in an earlier version moves to its first item', () => {
+  const oldList = { headingPath: ['Widget sync plan', 'Architecture', 'Storage'], quote: normalizeQuote('- Each row carries a version\n- Conflicts resolve last-writer-wins'), blockIndex: 6 }
+  const blocks = parseBlocks(PLAN)
+  expect(blocks[reanchor(oldList, blocks)]?.text).toBe('- Each row carries a version')
+})
+
+test('a comment lands on one list item and the review names it', async ($, on) => {
+  const { submitted } = standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  for (let i = 0; i < 7; i += 1) await ui.press({ key: 'next' })
+  await ui.press({ key: 'comment' })
+  await ui.input({ key: 'compose', text: 'Last-writer-wins loses offline edits.' })
+  await ui.press({ key: 'submit' })
+  const review = submitted.pop()?.text ?? ''
+  expect(review).toContain('the list item beginning "Conflicts resolve last-writer-wins"')
+  expect(review).not.toContain('Each row carries a version')
+  await ui.unmount()
+})
+
+test('a table lays out as an aligned grid', () => {
+  expect(tableGrid('| Phase | Owner |\n| ----: | :---: |\n| 1 | sync team |')).toEqual([
+    'Phase │   Owner',
+    '──────┼──────────',
+    '    1 │ sync team',
+  ])
+})
+
+test('tables and code never wrap: a narrow pane cuts them at the edge and p pans', async ($, on) => {
+  const wide = `# Wide\n\n| Name | Description |\n| --- | --- |\n| sync | ${'a long cell '.repeat(8).trim()} |\n\nAfter.\n`
+  standBeneath(on, { 'docs/wide.md': wide })
+  await runReview($, 'docs/wide.md')
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', props: { ...PANE_PROPS, bodyColumns: 50 }, requestId: PANE })
+    const grid = await ui.find({ type: 'Code' })
+    expect(grid?.props.wrap).toBe('truncate-end')
+    expect(grid?.text).toStartWith('Name │ Description')
+    expect(await ui.find({ type: 'Button', key: 'pan' })).toBeUndefined()
+
+    await ui.press({ key: 'next' })
+    expect(await ui.find({ type: 'Text', text: span(1, 48, 102) })).toBeDefined()
+    await ui.press({ key: 'pan' })
+    expect(await ui.find({ type: 'Text', text: span(41, 88, 102) })).toBeDefined()
+    expect((await ui.find({ type: 'Code' }))?.text).not.toContain('Name')
+    await ui.press({ key: 'pan' })
+    expect(await ui.find({ type: 'Text', text: span(55, 102, 102) })).toBeDefined()
+    await ui.press({ key: 'pan' })
+    expect(await ui.find({ type: 'Text', text: span(1, 48, 102) })).toBeDefined()
+
+    // Moving away puts the table back at its left edge.
+    await ui.press({ key: 'pan' })
+    await ui.press({ key: 'next' })
+    await ui.press({ key: 'prev' })
+    expect(await ui.find({ type: 'Text', text: span(1, 48, 102) })).toBeDefined()
+    await ui.press({ key: 'top' })
+    await ui.unmount()
+  }
+})
+
+// ---- mouse --------------------------------------------------------------------
+
+test('a click on a block marker selects it; a second click comments', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', props: PANE_PROPS, requestId: PANE })
+    await ui.press({ key: 'b:5' })
+    expect(await ui.find({ type: 'Text', text: /block 6\/13/ })).toBeDefined()
+    expect(await ui.find({ type: 'Input', key: 'compose' })).toBeUndefined()
+    await ui.press({ key: 'b:5' })
+    expect(await ui.find({ type: 'Input', key: 'compose' })).toBeDefined()
+    await ui.press({ key: 'cancel' })
+    await ui.press({ key: 'top' })
+    await ui.unmount()
+  }
+})
+
+test('every block carries comment, ask and explain actions, shown on the current one and on hover', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  const asked: string[] = []
+  on('model.fork', (_, e) => {
+    asked.push(e.prompt)
+    return { value: { isAnswered: true, text: 'Because it is embedded.', usage: { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 8, cache_creation_input_tokens: 0 } } }
+  })
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'It stores rows on disk.', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }))
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+
+  // One row of actions per block, in the gap under it: shown on the current
+  // block, revealed by hover on the others.
+  const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.position === 'absolute')
+  expect(rows.length).toBe(13)
+  expect(rows.filter(r => r.props.display === undefined).length).toBe(1)
+  // The kit describes elements without their hover styling: the reveal itself is validated, not asserted.
+  expect(rows.filter(r => r.props.display === 'none').length).toBe(12)
+
+  await ui.press({ key: 'act-a:5' })
+  expect(await ui.find({ type: 'Text', text: /block 6\/13/ })).toBeDefined()
+  expect((await ui.find({ type: 'Input', key: 'compose' }))?.props.label).toBe('ask:')
+  await ui.input({ key: 'compose', text: 'Why one file per user?' })
+  expect(asked[0]).toContain('Widgets live in a SQLite file')
+
+  await ui.press({ key: 'act-h:12' })
+  expect(await ui.find({ type: 'Text', text: /block 13\/13/ })).toBeDefined()
+  expect(await ui.find({ type: 'Markdown', text: /stores rows on disk/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the arrows beside a wide table pan it by click, and select it first', async ($, on) => {
+  const wide = `# Wide\n\n| Name | Description |\n| --- | --- |\n| sync | ${'a long cell '.repeat(8).trim()} |\n`
+  standBeneath(on, { 'docs/wide.md': wide })
+  await runReview($, 'docs/wide.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: { ...PANE_PROPS, bodyColumns: 50 }, requestId: PANE })
+  // The bar is there before the table is selected; a press on it selects the table.
+  expect(await ui.find({ type: 'Text', text: /block 1\/2/ })).toBeDefined()
+  await ui.press({ key: 'pan-right:1' })
+  expect(await ui.find({ type: 'Text', text: /block 2\/2/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: span(41, 88, 102) })).toBeDefined()
+  await ui.press({ key: 'pan-right:1' })
+  await ui.press({ key: 'pan-right:1' })
+  expect(await ui.find({ type: 'Text', text: span(55, 102, 102) })).toBeDefined()
+  await ui.press({ key: 'pan-left:1' })
+  expect(await ui.find({ type: 'Text', text: span(15, 62, 102) })).toBeDefined()
+  await ui.press({ key: 'pan-left:1' })
+  expect(await ui.find({ type: 'Text', text: span(1, 48, 102) })).toBeDefined()
+  await ui.unmount()
+})
+
+test('in a document too long to draw whole, the wheel at the edge moves the window on', async ($, on) => {
+  const long = `# Long\n\n${Array.from({ length: 300 }, (_, i) => `Paragraph ${i + 1}.`).join('\n\n')}\n`
+  standBeneath(on, { 'docs/long.md': long })
+  await runReview($, 'docs/long.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Text', text: /… 180 more below/ })).toBeDefined()
+
+  const wheel = (by: number, offset: number) =>
+    $.ui.scroll({ component: 'Pane', requestId: PANE, by, offset, bodyRows: 40, contentRows: 400, origin: { kind: 'person' }, pointer: { column: 10, row: 20 } })
+  // Mid-tree, the engine scrolls as ever.
+  await wheel(1, 100)
+  expect(await ui.find({ type: 'Text', text: /block 1\/301/ })).toBeDefined()
+  // At the bottom, the cursor goes to the first block past the window.
+  await wheel(1, 360)
+  expect(await ui.find({ type: 'Text', text: /block 122\/301/ })).toBeDefined()
+  expect(await ui.find({ type: 'Markdown', text: /^Paragraph 121\.$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /… 61 more above/ })).toBeDefined()
+  // At the top, back to the last block before it.
+  await wheel(-1, 0)
+  expect(await ui.find({ type: 'Text', text: /block 61\/301/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a press on the scrollbar track jumps there, on every surface', async ($, on) => {
+  const wide = `# Wide\n\n| Name | Description |\n| --- | --- |\n| sync | ${'a long cell '.repeat(8).trim()} |\n`
+  standBeneath(on, { 'docs/wide.md': wide })
+  await runReview($, 'docs/wide.md')
+
+  for (const surface of [...SURFACES, 'mobile'] as const) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', props: { ...PANE_PROPS, bodyColumns: 50 }, requestId: PANE })
+    // 48 columns of room, less ‹, › and the label's widest form ("102–102/102"): a 31-cell track of 15 two-cell segments, the thumb 7 of them.
+    const segments = (await ui.findAll({ type: 'Button' })).filter(b => /^seg:1:/.test(b.key ?? ''))
+    expect(segments.length).toBe(15)
+    expect(segments.filter(b => b.text === '━━').length).toBe(7)
+
+    // The last segment: the thumb goes to the right end.
+    await ui.press({ key: 'seg:1:14' })
+    expect(await ui.find({ type: 'Text', text: /block 2\/2/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: span(55, 102, 102) })).toBeDefined()
+    // Near the left end: the thumb cannot centre there, so it goes to the start.
+    await ui.press({ key: 'seg:1:2' })
+    expect(await ui.find({ type: 'Text', text: span(1, 48, 102) })).toBeDefined()
+    // The middle: the thumb centred on it.
+    await ui.press({ key: 'seg:1:7' })
+    expect(await ui.find({ type: 'Text', text: span(28, 75, 102) })).toBeDefined()
+    // j and k still move: the bar never takes the keys.
+    await ui.press({ key: 'prev' })
+    expect(await ui.find({ type: 'Text', text: /block 1\/2/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: span(1, 48, 102) })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('a table keeps its height when panned past the end of a short row', async ($, on) => {
+  const wide = `# Wide\n\n| Name | Notes |\n| --- | --- |\n| long | ${'word '.repeat(30).trim()} |\n| short | x |\n\n\`\`\`\nshort\n\n${'x'.repeat(120)}\n\`\`\`\n`
+  standBeneath(on, { 'docs/wide.md': wide })
+  await runReview($, 'docs/wide.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: { ...PANE_PROPS, bodyColumns: 50 }, requestId: PANE })
+  // Code drops an empty line, so no line handed to it may be empty, panned or not.
+  const lines = async () => (await ui.findAll({ type: 'Code' })).map(c => (c.text ?? '').split('\n'))
+
+  const [table, code] = await lines()
+  expect(table?.length).toBe(4)
+  expect(code).toEqual(['short', ' ', 'x'.repeat(120)])
+
+  await ui.press({ key: 'pan-right:1' })
+  await ui.press({ key: 'pan-right:1' })
+  const [panned] = await lines()
+  expect(panned?.length).toBe(4)
+  expect(panned?.some(l => l === '')).toBe(false)
+  expect(panned?.[3]).toBe(' ') // "short │ x" lies wholly left of the window
+
+  await ui.press({ key: 'pan-right:2' })
+  const [, pannedCode] = await lines()
+  expect(pannedCode).toEqual([' ', ' ', 'x'.repeat(120 - 40)])
+  await ui.unmount()
+})
+
+test('the scrollbar keeps its size at every pan, whatever the label reads', async ($, on) => {
+  const wide = `# Wide\n\n| Name | Notes |\n| --- | --- |\n| long | ${'word '.repeat(60).trim()} |\n`
+  standBeneath(on, { 'docs/wide.md': wide })
+  await runReview($, 'docs/wide.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: { ...PANE_PROPS, bodyColumns: 120 }, requestId: PANE })
+  const bar = async () => {
+    const segments = (await ui.findAll({ type: 'Button' })).filter(b => /^seg:1:/.test(b.key ?? ''))
+    const label = (await ui.findAll({ type: 'Text' })).map(t => t.text ?? '').find(t => /^\d+–\d+\/\d+/.test(t)) ?? ''
+    return { cells: segments.map(b => (b.text ?? '').length).reduce((x, y) => x + y, 0), label }
+  }
+  const first = await bar()
+  const seen = [first]
+  for (let i = 0; i < 4; i += 1) {
+    await ui.press({ key: 'pan-right:1' })
+    seen.push(await bar())
+  }
+  // The label grew from "1–117/..." to three-digit starts; the bar did not move.
+  expect(new Set(seen.map(s => s.label.trim().length)).size).toBeGreaterThan(1)
+  expect(seen.every(s => s.cells === first.cells && s.label.length === first.label.length)).toBe(true)
+  await ui.unmount()
 })

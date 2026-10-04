@@ -28,7 +28,7 @@ import type {
   SpecReviewDoc,
   SpecReviewThread,
 } from '../types'
-import { anchorFor, basename, cleanText, excerpt, parseBlocks, plainText, reanchor, titleOf } from './blocks'
+import { anchorFor, basename, cleanText, codeParts, excerpt, parseBlocks, plainText, reanchor, titleOf, unwrappedLines } from './blocks'
 import { changedBlocks, diffText } from './diff'
 import { STORE_PREFIX, isSaved, keysToEvict, storeKey, toSaved } from './persist'
 import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildExplainPrompt, buildReviewPrompt, buildStandaloneAskPrompt } from './review-prompt'
@@ -45,6 +45,12 @@ const MARKDOWN_CAP = 9000
 const CODE_CAP = 9000
 const MAX_HUNKS = 40
 const CANDIDATE_TURNS = 2
+// Below this many columns the pane draws compact: a narrower gutter, the path on its own line.
+const NARROW = 70
+// Up to this many blocks the pane draws them all, so the wheel reaches every
+// one; a longer document draws a window of WINDOW_HALF either side of the cursor.
+const MAX_DRAWN = 200
+const WINDOW_HALF = 60
 
 const docA = atom({ plugin: 'spec-review', key: 'doc' } as const, null)
 const commentsA = atom({ plugin: 'spec-review', key: 'comments' } as const, [])
@@ -282,7 +288,7 @@ function newId(prefix: string): string {
 // ---- actions ---------------------------------------------------------------
 
 async function setCursor($: EngineInterface, cursor: number): Promise<void> {
-  await update($, docA, d => (d && d.cursor !== cursor ? { ...d, cursor, view: 'document' as const } : d))
+  await update($, docA, d => (d && d.cursor !== cursor ? { ...d, cursor, view: 'document' as const, pan: 0 } : d))
   void $.ui.scroll({ to: { key: `blk:${cursor}` }, in: PANE, block: 'nearest' }).catch(() => undefined)
   void $.ui.focus({ requestId: PANE, key: `b:${cursor}` }).catch(() => undefined)
 }
@@ -363,12 +369,14 @@ async function nextComment($: EngineInterface): Promise<void> {
   await setCursor($, after ?? marked[0] ?? doc.cursor)
 }
 
-/** `h`: a plain-words explanation of the current block from a small, fresh model. */
-async function explain($: EngineInterface, model: string): Promise<void> {
+/** `h`: a plain-words explanation of a block (the current one by default) from a small, fresh model. */
+async function explain($: EngineInterface, model: string, blockIndex?: number): Promise<void> {
   const doc = await read($, docA)
   if (!doc) return
-  const block = doc.blocks[doc.cursor]
+  const at = blockIndex ?? doc.cursor
+  const block = doc.blocks[at]
   if (!block) return
+  if (at !== doc.cursor) await update($, docA, d => (d ? { ...d, cursor: at, pan: 0 } : d))
   const thread: SpecReviewThread = {
     id: newId('x'),
     anchor: anchorFor(block),
@@ -412,6 +420,43 @@ async function toggleView($: EngineInterface): Promise<void> {
   await update($, docA, d => (d ? { ...d, view: d.view === 'diff' ? ('document' as const) : ('diff' as const) } : d))
   await update($, composerA, () => null)
   void $.ui.scroll({ to: 'start', in: PANE }).catch(() => undefined)
+}
+
+/**
+ * Scrolls block `at`'s table or code sideways, within 0 to `max`, and makes it
+ * the current block: by `by` columns from where it is, or to column `to`.
+ * With `cycle` (the `p` key) a move past the right edge goes back to the left.
+ */
+async function pan(
+  $: EngineInterface,
+  at: number,
+  move: { by: number; cycle?: boolean } | { to: number },
+  max: number,
+): Promise<void> {
+  await update($, docA, d => {
+    if (!d) return d
+    const from = d.cursor === at ? (d.pan ?? 0) : 0
+    const to =
+      'to' in move
+        ? Math.max(0, Math.min(max, move.to))
+        : move.cycle && from >= max
+          ? 0
+          : Math.max(0, Math.min(max, from + move.by))
+    return d.cursor === at && to === from && d.view === 'document' ? d : { ...d, cursor: at, view: 'document' as const, pan: to }
+  })
+}
+
+/** How far a table or code block can scroll sideways in `room` columns, and by how much a step. */
+function panRange(block: SpecReviewBlock, room: number): { max: number; step: number } {
+  return { max: Math.max(0, unwrappedWidth(block) - room), step: Math.max(8, room - 8) }
+}
+
+/** The blocks the pane draws: all of them, or a window around the cursor in a long document. */
+function windowOf(n: number, cursor: number): { lo: number; hi: number } {
+  if (n <= MAX_DRAWN) return { lo: 0, hi: n }
+  const size = WINDOW_HALF * 2 + 1
+  const lo = Math.max(0, Math.min(cursor - WINDOW_HALF, n - size))
+  return { lo, hi: Math.min(n, lo + size) }
 }
 
 /** Takes the current text as the version reviewed: the diff empties. */
@@ -610,6 +655,106 @@ function capMarkdown(text: string): string {
   return text.length > MARKDOWN_CAP ? `${text.slice(0, MARKDOWN_CAP)}\n\n_…block truncated for display…_` : text
 }
 
+/** Cut on a line under the element's limit, as a hunk is. */
+function capCode(source: string): string {
+  if (source.length <= CODE_CAP) return source
+  const cut = source.lastIndexOf('\n', CODE_CAP)
+  return source.slice(0, cut > 0 ? cut : CODE_CAP)
+}
+
+function widthOf(line: string): number {
+  return [...line].length
+}
+
+/** How wide a table or code block draws unwrapped; 0 for a block that wraps. */
+function unwrappedWidth(block: SpecReviewBlock): number {
+  const lines = unwrappedLines(block)
+  return lines ? Math.max(0, ...lines.map(widthOf)) : 0
+}
+
+/**
+ * One block's content. Prose wraps as Markdown draws it; a table (as an
+ * aligned grid) and a code block never wrap: a line wider than `room` is cut
+ * at the edge, and `pan` columns scroll it right.
+ */
+function drawBody(
+  $: EngineInterface,
+  t: Table,
+  block: SpecReviewBlock,
+  args: { room: number; pan: number; dim: boolean; isCurrent: boolean },
+): RenderElement {
+  const { Box, Text, Button, Markdown, Code } = t
+  const lines = unwrappedLines(block)
+  if (!lines) return <Markdown text={capMarkdown(block.text)} dimColor={args.dim} />
+
+  const language = block.kind === 'code' ? codeParts(block.text).language : undefined
+  const width = Math.max(0, ...lines.map(widthOf))
+  // Code drops an empty line, so a row scrolled past its end (or a blank line
+  // of code) keeps one space: the block holds its height at every pan.
+  const shown = lines.map(l => (args.pan > 0 ? [...l].slice(args.pan).join('') : l) || ' ')
+  const isWide = width > args.room
+  const range = panRange(block, args.room)
+  return (
+    <Box flexDirection="column">
+      <Code source={capCode(shown.join('\n'))} {...(language ? { language } : {})} wrap="truncate-end" />
+      {isWide && drawScrollbar($, t, { at: block.index, pan: args.pan, width, room: args.room, ...range })}
+    </Box>
+  )
+}
+
+/**
+ * The scrollbar under a wide table or code block: `‹`, a track of pressable
+ * segments with the thumb drawn bold, `›`, and the columns in view. A press on
+ * a segment centres the thumb there; on a block not yet current it selects it.
+ * Buttons, not a Client: they work on every surface and never take the keys.
+ */
+function drawScrollbar(
+  $: EngineInterface,
+  t: Table,
+  a: { at: number; pan: number; width: number; room: number; max: number; step: number },
+): RenderElement {
+  const { Box, Text, Button } = t
+  // The label takes the room of its widest form, so the track's width never
+  // depends on where the block is panned to: the bar holds its size.
+  const labelRoom = `${a.width}–${a.width}/${a.width}`.length
+  const label = `${a.pan + 1}–${Math.min(a.width, a.pan + a.room)}/${a.width}`.padEnd(labelRoom)
+  // ‹, ›, the label and the gaps between them take the rest of the row.
+  const track = Math.max(8, a.room - labelRoom - 6)
+  // At most 30 segments (each one a Button), each as wide as fills the track.
+  const cell = Math.max(2, Math.ceil(track / 30))
+  const segments = Math.max(4, Math.floor(track / cell))
+  const thumb = Math.max(1, Math.min(segments, Math.round((segments * a.room) / a.width)))
+  const travel = segments - thumb
+  const start = a.max === 0 || travel === 0 ? 0 : Math.round((travel * a.pan) / a.max)
+  const panAt = (k: number) => (travel === 0 ? 0 : Math.round((Math.max(0, Math.min(travel, k - Math.floor(thumb / 2))) * a.max) / travel))
+
+  return (
+    <Box flexDirection="row" columnGap={1}>
+      <Button key={`pan-left:${a.at}`} plain dimColor={a.pan === 0} label="‹" onPress={() => void pan($, a.at, { by: -a.step }, a.max)} />
+      <Box flexDirection="row" flexShrink={0}>
+        {Array.from({ length: segments }, (_, k) => {
+          const isThumb = k >= start && k < start + thumb
+          return (
+            <Button
+              key={`seg:${a.at}:${k}`}
+              plain
+              dimColor={!isThumb}
+              label={(isThumb ? '━' : '─').repeat(cell)}
+              onPress={() => void pan($, a.at, { to: panAt(k) }, a.max)}
+            />
+          )
+        })}
+      </Box>
+      <Button key={`pan-right:${a.at}`} plain dimColor={a.pan >= a.max} label="›" onPress={() => void pan($, a.at, { by: a.step }, a.max)} />
+      <Box flexShrink={0}>
+        <Text dimColor wrap="truncate-end">
+          {label}
+        </Text>
+      </Box>
+    </Box>
+  )
+}
+
 function capHunk(hunk: string): string {
   if (hunk.length <= CODE_CAP) return hunk
   // Cut on a line so the hunk still parses; the header stays whole.
@@ -625,7 +770,11 @@ function drawDiff($: EngineInterface, t: Table, doc: SpecReviewDoc, notice: stri
     <Box flexDirection="column">
       <Box flexDirection="row" gap={1}>
         <Text bold>{doc.title}</Text>
-        <Text dimColor>{doc.path}</Text>
+        <Box flexShrink={1}>
+          <Text dimColor wrap="truncate-middle">
+            {doc.path}
+          </Text>
+        </Box>
       </Box>
       <Text dimColor>
         diff against the version you reviewed
@@ -633,7 +782,7 @@ function drawDiff($: EngineInterface, t: Table, doc: SpecReviewDoc, notice: stri
         {doc.revision > 0 ? ` · revision ${doc.revision}` : ''}
       </Text>
       {notice && <Text color="green">{notice}</Text>}
-      <Box flexDirection="row" gap={2} marginBottom={1}>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={2} marginBottom={1}>
         <Button key="diff" plain hotkey="d" label="document" onPress={() => void toggleView($)} />
         <Button key="next-change" plain hotkey="n" label="next change" onPress={() => void nextChange($)} />
         <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />
@@ -662,7 +811,8 @@ function drawPane(
     threads: readonly SpecReviewThread[]
     composer: SpecReviewComposer
     notice: string | null
-    bodyRows: number
+    /** Cells across the pane's body. */
+    columns: number
     approvePhrase: string
     explainModel: string
   },
@@ -685,13 +835,13 @@ function drawPane(
   const compose = (mode: 'comment' | 'ask', at?: number) => (Input ? openComposer($, mode, at) : composeViaDialog($, mode, at))
 
   const n = doc.blocks.length
-  const half = Math.max(10, Math.floor(args.bodyRows / 3))
-  const showAll = n <= half * 2 + 1
-  const lo = showAll ? 0 : Math.max(0, Math.min(doc.cursor - half, n - (half * 2 + 1)))
-  const hi = showAll ? n : Math.min(n, lo + half * 2 + 1)
+  const { lo, hi } = windowOf(n, doc.cursor)
   const live = comments.filter(c => !c.isOrphan)
   const orphans = comments.filter(c => c.isOrphan)
   const changed = new Set(doc.changed)
+  const isNarrow = args.columns < NARROW
+  const gutter = isNarrow ? 2 : 3
+  const roomFor = (block: SpecReviewBlock) => Math.max(10, args.columns - gutter - (block.depth ?? 0) * 2)
 
   const rows: RenderElement[] = []
   for (let i = lo; i < hi; i += 1) {
@@ -701,26 +851,37 @@ function drawPane(
     const isChanged = changed.has(i)
     const own = live.filter(c => c.anchor.blockIndex === i)
     const ownThreads = threads.filter(th => th.anchor.blockIndex === i)
+    const indent = (block.depth ?? 0) * 2
+    // Items of one list sit tight, as the list would.
+    // The current one keeps its gap: its actions sit there.
+    const isTight = block.kind === 'item' && doc.blocks[i + 1]?.kind === 'item' && !isCurrent
+    const under = gutter + indent
 
     rows.push(
-      <Box key={`blk:${i}`} flexDirection="column" marginBottom={1}>
+      <Box key={`blk:${i}`} flexDirection="column" marginBottom={isTight ? 0 : 1}>
         <Box flexDirection="row">
-          <Box width={3}>
+          <Box width={gutter}>
             <Button
               key={`b:${i}`}
               plain
               dimColor={!isCurrent && !isChanged}
               label={isCurrent ? '▶' : isChanged ? '+' : '·'}
               hover={{ dimColor: false, bold: true }}
-              onPress={() => void compose('comment', i)}
+              // A click selects the block; on the current one (Enter after Tab, a second click) it comments.
+              onPress={() => void (isCurrent ? compose('comment', i) : setCursor($, i))}
             />
           </Box>
-          <Box flexDirection="column" flexGrow={1}>
-            <Markdown text={capMarkdown(block.text)} dimColor={!isCurrent && composer !== null} />
+          <Box flexDirection="column" flexGrow={1} flexShrink={1} marginLeft={indent}>
+            {drawBody($, t, block, {
+              room: roomFor(block),
+              pan: isCurrent ? (doc.pan ?? 0) : 0,
+              dim: !isCurrent && composer !== null,
+              isCurrent,
+            })}
           </Box>
         </Box>
         {own.map(c => (
-          <Box key={`cm:${c.id}`} flexDirection="row" marginLeft={3}>
+          <Box key={`cm:${c.id}`} flexDirection="row" marginLeft={under}>
             <Text color="yellow">✎ </Text>
             <Box flexGrow={1}>
               <Text color="yellow" wrap="wrap">
@@ -731,7 +892,7 @@ function drawPane(
           </Box>
         ))}
         {ownThreads.map(th => (
-          <Box key={`th:${th.id}`} flexDirection="column" marginLeft={3}>
+          <Box key={`th:${th.id}`} flexDirection="column" marginLeft={under}>
             <Text color="cyan" wrap="wrap">
               {th.kind === 'explain' ? 'ⓘ' : '?'} {th.question}
               {th.kind === 'explain' && th.model ? ` (${th.model})` : ''}
@@ -755,7 +916,7 @@ function drawPane(
           </Box>
         ))}
         {composer && composer.mode !== 'find' && composer.blockIndex === i && Input && (
-          <Box flexDirection="row" marginLeft={3} gap={1}>
+          <Box flexDirection="row" marginLeft={under} gap={1}>
             <Input
               key="compose"
               autoFocus
@@ -772,15 +933,38 @@ function drawPane(
             <Button key="cancel" plain dimColor label="cancel" onPress={() => void update($, composerA, () => null)} />
           </Box>
         )}
+        {/* The block's actions, in the blank row under it so nothing moves: always
+            under the current block, under any other while the pointer is on it. */}
+        <Box
+          position="absolute"
+          bottom={-1}
+          left={under}
+          flexDirection="row"
+          {...(isCurrent ? {} : { display: 'none' as const, hover: { display: 'flex' as const } })}
+        >
+          <Button key={`act-c:${i}`} plain dimColor label="comment" onPress={() => void compose('comment', i)} />
+          <Text dimColor> · </Text>
+          <Button key={`act-a:${i}`} plain dimColor label="ask" onPress={() => void compose('ask', i)} />
+          <Text dimColor> · </Text>
+          <Button key={`act-h:${i}`} plain dimColor label="explain" onPress={() => void explain($, args.explainModel, i)} />
+        </Box>
       </Box>,
     )
   }
 
+  const current = doc.blocks[doc.cursor]
+  const currentWidth = current ? unwrappedWidth(current) : 0
+  const { max: panMax, step: panStep } = current ? panRange(current, roomFor(current)) : { max: 0, step: 8 }
+
   return (
     <Box flexDirection="column">
-      <Box flexDirection="row" gap={1}>
+      <Box flexDirection={isNarrow ? 'column' : 'row'} columnGap={1}>
         <Text bold>{doc.title}</Text>
-        <Text dimColor>{doc.path}</Text>
+        <Box flexShrink={1}>
+          <Text dimColor wrap="truncate-middle">
+            {doc.path}
+          </Text>
+        </Box>
       </Box>
       <Text dimColor>
         block {Math.min(doc.cursor + 1, n)}/{n} · {live.length} {live.length === 1 ? 'comment' : 'comments'}
@@ -794,7 +978,7 @@ function drawPane(
           : ''}
       </Text>
       {notice && <Text color="green">{notice}</Text>}
-      <Box flexDirection="row" gap={2} marginBottom={1}>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={2} marginBottom={1}>
         <Button key="next" plain hotkey="j" label="next" onPress={() => void moveCursor($, 1)} />
         <Button key="prev" plain hotkey="k" label="prev" onPress={() => void moveCursor($, -1)} />
         <Button key="top" plain hotkey="g" label="top" onPress={() => void moveCursor($, () => 0)} />
@@ -806,6 +990,7 @@ function drawPane(
         <Button key="explain" plain hotkey="h" label="explain" onPress={() => void explain($, args.explainModel)} />
         <Button key="submit" plain hotkey="s" label={`submit review${live.length > 0 ? ` (${live.length})` : ''}`} onPress={() => void submitReview($)} />
         <Button key="approve" plain hotkey="o" label="approve" onPress={() => void approve($, args.approvePhrase)} />
+        {panMax > 0 && <Button key="pan" plain hotkey="p" label="pan" onPress={() => void pan($, doc.cursor, { by: panStep, cycle: true }, panMax)} />}
         {doc.changed.length > 0 && <Button key="next-change" plain hotkey="n" label="next change" onPress={() => void nextChange($)} />}
         {doc.changed.length > 0 && <Button key="diff" plain hotkey="d" label="diff" onPress={() => void toggleView($)} />}
         {doc.changed.length > 0 && <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />}
@@ -954,10 +1139,32 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    const m = /^b:(\d+)$/.exec(e.element ?? '')
+    // A block's marker or one of its actions: the block becomes the current one,
+    // which also shows its actions should the focus land on a hidden one.
+    const m = /^(?:b|act-[cah]):(\d+)$|^(?:seg|pan-left|pan-right):(\d+)/.exec(e.element ?? '')
     if (m) {
-      const cursor = Number(m[1])
-      await update($, docA, d => (d && d.cursor !== cursor ? { ...d, cursor } : d))
+      const cursor = Number(m[1] ?? m[2])
+      await update($, docA, d => (d && d.cursor !== cursor ? { ...d, cursor, pan: 0 } : d))
+    }
+    return next(e)
+  })
+
+  // The wheel at the edge of what is drawn, in a document too long to draw
+  // whole: move the window on by taking the cursor to the first block past it.
+  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
+    if (e.origin.kind !== 'person' || !e.pointer) return next(e)
+    const doc = await read($, docA)
+    if (!doc || doc.view !== 'document') return next(e)
+    const { lo, hi } = windowOf(doc.blocks.length, doc.cursor)
+    const atBottom = e.by > 0 && e.offset >= Math.max(0, e.contentRows - e.bodyRows)
+    const atTop = e.by < 0 && e.offset <= 0
+    if (atBottom && hi < doc.blocks.length) {
+      await setCursor($, hi)
+      return {}
+    }
+    if (atTop && lo > 0) {
+      await setCursor($, lo - 1)
+      return {}
     }
     return next(e)
   })
@@ -975,8 +1182,8 @@ export const register: Register = (on, options) => {
       read($, composerA),
       read($, noticeA),
     ])
-    const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
-    const common = { doc, comments, threads, composer, notice, bodyRows, approvePhrase, explainModel }
+    const columns = e.props.bodyColumns ?? e.viewport?.columns ?? 80
+    const common = { doc, comments, threads, composer, notice, columns, approvePhrase, explainModel }
 
     if (e.surface === 'mobile') {
       const t = $.ui.resolve(e)
