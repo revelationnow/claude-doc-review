@@ -1,6 +1,6 @@
 # Spec Review Chat: a Claude Code mod for discussing design and plan documents
 
-Status: feasibility study and UX design. No code yet.
+Status: phase 1 built in `spec-review/` (see README.md). Phases 2 and 3 are design only.
 
 ## 1. The ask
 

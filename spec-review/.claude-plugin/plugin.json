@@ -1,0 +1,27 @@
+{
+  "name": "spec-review",
+  "version": "0.1.0",
+  "description": "Review design specs and implementation plans in a pane: move by block, pin comments, ask side questions, submit one review.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "globs": {
+      "type": "string",
+      "title": "Document globs",
+      "description": "Comma-separated globs (relative to the working directory) of documents that count as specs or plans.",
+      "default": "docs/superpowers/specs/**/*.md,docs/superpowers/plans/**/*.md,docs/plans/**/*.md,docs/specs/**/*.md,**/*-design.md,**/*-plan.md,SPEC.md,PLAN.md"
+    },
+    "offer": {
+      "type": "string",
+      "title": "When a spec is ready",
+      "description": "auto: open the review pane when the model asks for a review; toast: only show a toast and status line; off: never offer, /review only.",
+      "default": "auto",
+      "options": ["auto", "toast", "off"]
+    },
+    "approvePhrase": {
+      "type": "string",
+      "title": "Approval phrase",
+      "description": "What the approve action sends to the model as your words.",
+      "default": "Looks good, proceed."
+    }
+  }
+}
