@@ -52,11 +52,33 @@ export type SpecReviewThread = {
 export type SpecReviewDoc = {
   path: string
   title: string
+  /** The file's text as last read. */
+  text: string
   blocks: SpecReviewBlock[]
   /** The focused block's index. */
   cursor: number
   /** How many times the file was re-read since opening. */
   revision: number
+  /** The text the reviewer last read in full: set on open, on submit, on "mark reviewed". */
+  baselineText: string
+  /** Indices of blocks that differ from the baseline. */
+  changed: number[]
+  /** What the pane shows: the document, or the diff against the baseline. */
+  view: 'document' | 'diff'
+  /** True from a submitted review until the file next changes. */
+  awaitingRevision: boolean
+  /** When a review or approval was last sent for this document. */
+  lastReviewAt: number | null
+}
+
+/** One document's record in `$.store`, kept across sessions. */
+export type SpecReviewSaved = {
+  path: string
+  comments: SpecReviewComment[]
+  threads: SpecReviewThread[]
+  baselineText: string | null
+  lastReviewAt: number | null
+  updatedAt: number
 }
 
 export type SpecReviewComposer = {

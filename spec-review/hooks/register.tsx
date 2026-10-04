@@ -1,10 +1,23 @@
 // spec-review: review a design spec or implementation plan in a pane.
 //
 // Move block by block, pin comments, ask side questions the main conversation
-// never sees, then submit every comment as one review, or approve.
+// never sees, then submit every comment as one review, or approve. Comments
+// persist across sessions, and a revision can be read as a diff against the
+// version last reviewed.
 
 import { atom, read, update } from 'claude-code'
-import type { ElementConstructor, EngineInterface, InputProps, Register, RenderElement } from 'claude-code'
+import type {
+  BoxProps,
+  ButtonProps,
+  CodeProps,
+  ElementConstructor,
+  EngineInterface,
+  InputProps,
+  MarkdownProps,
+  Register,
+  RenderElement,
+  TextProps,
+} from 'claude-code'
 
 import type {
   SpecReviewBlock,
@@ -15,6 +28,8 @@ import type {
   SpecReviewThread,
 } from '../types'
 import { anchorFor, basename, cleanText, excerpt, parseBlocks, reanchor, titleOf } from './blocks'
+import { changedBlocks, diffText } from './diff'
+import { STORE_PREFIX, isSaved, keysToEvict, storeKey, toSaved } from './persist'
 import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildReviewPrompt } from './review-prompt'
 
 const PLUGIN = 'spec-review'
@@ -25,6 +40,8 @@ const DEFAULT_GLOBS =
   'docs/superpowers/specs/**/*.md,docs/superpowers/plans/**/*.md,docs/plans/**/*.md,docs/specs/**/*.md,**/*-design.md,**/*-plan.md,SPEC.md,PLAN.md'
 const REVIEW_ASKED = /please (review|take a look)|review (it|the (plan|spec|design|document))|let me know if you want (to make )?(any )?changes/i
 const MARKDOWN_CAP = 9000
+const CODE_CAP = 9000
+const MAX_HUNKS = 40
 const CANDIDATE_TURNS = 2
 
 const docA = atom({ plugin: 'spec-review', key: 'doc' } as const, null)
@@ -36,10 +53,11 @@ const offeredA = atom({ plugin: 'spec-review', key: 'offered' } as const, [])
 const noticeA = atom({ plugin: 'spec-review', key: 'notice' } as const, null)
 
 type Table = {
-  Box: ElementConstructor<import('claude-code').BoxProps>
-  Text: ElementConstructor<import('claude-code').TextProps>
-  Button: ElementConstructor<import('claude-code').ButtonProps>
-  Markdown: ElementConstructor<import('claude-code').MarkdownProps>
+  Box: ElementConstructor<BoxProps>
+  Text: ElementConstructor<TextProps>
+  Button: ElementConstructor<ButtonProps>
+  Markdown: ElementConstructor<MarkdownProps>
+  Code: ElementConstructor<CodeProps>
 }
 
 // ---- globs -----------------------------------------------------------------
@@ -84,18 +102,14 @@ function samePath(cwd: string, a: string, b: string): boolean {
 
 // ---- document --------------------------------------------------------------
 
-async function loadDoc($: EngineInterface, path: string, previous: SpecReviewDoc | null): Promise<SpecReviewDoc> {
+async function readText($: EngineInterface, path: string): Promise<string> {
   const raw = await $.fs.read(path)
-  const text = typeof raw === 'string' ? raw : ''
-  const blocks = parseBlocks(cleanText(text))
-  const cursor = previous ? Math.min(previous.cursor, Math.max(0, blocks.length - 1)) : 0
-  return {
-    path,
-    title: titleOf(blocks, path),
-    blocks,
-    cursor,
-    revision: previous ? previous.revision + 1 : 0,
-  }
+  return cleanText(typeof raw === 'string' ? raw : '')
+}
+
+function withBaseline(doc: Omit<SpecReviewDoc, 'changed'>, baselineText: string): SpecReviewDoc {
+  const changed = baselineText === doc.text ? [] : changedBlocks(doc.blocks, parseBlocks(baselineText))
+  return { ...doc, baselineText, changed }
 }
 
 async function reanchorAll($: EngineInterface, blocks: readonly SpecReviewBlock[]): Promise<void> {
@@ -113,21 +127,100 @@ async function reanchorAll($: EngineInterface, blocks: readonly SpecReviewBlock[
   )
 }
 
+async function loadSaved($: EngineInterface, key: string) {
+  const value = await $.store.get(key)
+  return isSaved(value) ? value : null
+}
+
+/** Writes the open document's comments, questions and baseline to the store. */
+async function persist($: EngineInterface): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  const cwd = await $.session.cwd()
+  const key = storeKey(cwd, doc.path)
+  const saved = toSaved(
+    {
+      path: doc.path,
+      comments: await read($, commentsA),
+      threads: await read($, threadsA),
+      baselineText: doc.baselineText,
+      lastReviewAt: doc.lastReviewAt,
+    },
+    await $.clock.now(),
+  )
+  await $.store.set(key, saved)
+
+  // Keep the store bounded: drop the records of the least recently touched documents.
+  const others = (await $.store.keys()).filter(k => k.startsWith(STORE_PREFIX) && k !== key)
+  if (others.length >= 12) {
+    const aged: { key: string; updatedAt: number }[] = []
+    for (const other of others) {
+      const value = await $.store.get(other)
+      aged.push({ key: other, updatedAt: isSaved(value) ? value.updatedAt : 0 })
+    }
+    for (const old of keysToEvict(aged)) await $.store.delete(old)
+  }
+}
+
 /** Opens `path` in the pane. `asked` is true when a person's action is behind it. */
 async function openDoc($: EngineInterface, path: string, asked: boolean) {
   const cwd = await $.session.cwd()
   const previous = await read($, docA)
   const isSame = previous !== null && samePath(cwd, previous.path, path)
-  const doc = await loadDoc($, path, isSame ? previous : null)
-  await update($, docA, () => doc)
+  const text = await readText($, path)
+  const blocks = parseBlocks(text)
+  let notice: string | null = null
+
   if (isSame) {
-    await reanchorAll($, doc.blocks)
+    const doc = withBaseline(
+      {
+        ...previous,
+        text,
+        blocks,
+        title: titleOf(blocks, path),
+        cursor: Math.min(previous.cursor, Math.max(0, blocks.length - 1)),
+        revision: previous.text === text ? previous.revision : previous.revision + 1,
+        view: 'document',
+        awaitingRevision: previous.text === text ? previous.awaitingRevision : false,
+      },
+      previous.baselineText,
+    )
+    await update($, docA, () => doc)
+    await reanchorAll($, blocks)
   } else {
-    await update($, commentsA, () => [])
-    await update($, threadsA, () => [])
+    const saved = await loadSaved($, storeKey(cwd, path))
+    const doc = withBaseline(
+      {
+        path,
+        title: titleOf(blocks, path),
+        text,
+        blocks,
+        cursor: 0,
+        revision: 0,
+        baselineText: saved?.baselineText ?? text,
+        view: 'document',
+        awaitingRevision: false,
+        lastReviewAt: saved?.lastReviewAt ?? null,
+      },
+      saved?.baselineText ?? text,
+    )
+    await update($, docA, () => doc)
+    await update($, commentsA, () => (saved ? [...saved.comments] : []))
+    await update($, threadsA, () => (saved ? [...saved.threads] : []))
+    await reanchorAll($, blocks)
+    if (saved && (saved.comments.length > 0 || saved.threads.length > 0)) {
+      const parts: string[] = []
+      if (saved.comments.length > 0) parts.push(`${saved.comments.length} ${saved.comments.length === 1 ? 'comment' : 'comments'}`)
+      if (saved.threads.length > 0) parts.push(`${saved.threads.length} ${saved.threads.length === 1 ? 'question' : 'questions'}`)
+      notice = `Restored ${parts.join(' and ')} from an earlier session.`
+    }
+    if (doc.changed.length > 0) {
+      notice = `${notice ? `${notice} ` : ''}The file changed since you last reviewed it: ${doc.changed.length} ${doc.changed.length === 1 ? 'block differs' : 'blocks differ'} (d for the diff).`
+    }
   }
   await update($, composerA, () => null)
-  await update($, noticeA, () => null)
+  await update($, noticeA, () => notice)
+  await persist($)
 
   const opened = await $.ui.open({
     id: PANE,
@@ -147,10 +240,30 @@ async function refreshDoc($: EngineInterface): Promise<void> {
     await update($, noticeA, () => 'The file was removed.')
     return
   }
-  const next = await loadDoc($, doc.path, doc)
+  const text = await readText($, doc.path)
+  if (text === doc.text) return
+  const blocks = parseBlocks(text)
+  const next = withBaseline(
+    {
+      ...doc,
+      text,
+      blocks,
+      title: titleOf(blocks, doc.path),
+      cursor: Math.min(doc.cursor, Math.max(0, blocks.length - 1)),
+      revision: doc.revision + 1,
+      awaitingRevision: false,
+    },
+    doc.baselineText,
+  )
   await update($, docA, () => next)
-  await reanchorAll($, next.blocks)
-  await update($, noticeA, () => `Document updated (revision ${next.revision}).`)
+  await reanchorAll($, blocks)
+  const n = next.changed.length
+  await update($, noticeA, () =>
+    n > 0
+      ? `Revision ${next.revision}: ${n} ${n === 1 ? 'block differs' : 'blocks differ'} from the version you reviewed (d for the diff, n to jump).`
+      : `Revision ${next.revision}: nothing differs from the version you reviewed.`,
+  )
+  await persist($)
 }
 
 function latest(list: readonly SpecReviewCandidate[]): SpecReviewCandidate | undefined {
@@ -163,32 +276,103 @@ function newId(prefix: string): string {
 
 // ---- actions ---------------------------------------------------------------
 
+async function setCursor($: EngineInterface, cursor: number): Promise<void> {
+  await update($, docA, d => (d && d.cursor !== cursor ? { ...d, cursor, view: 'document' as const } : d))
+  void $.ui.scroll({ to: { key: `blk:${cursor}` }, in: PANE, block: 'nearest' }).catch(() => undefined)
+  void $.ui.focus({ requestId: PANE, key: `b:${cursor}` }).catch(() => undefined)
+}
+
 async function moveCursor($: EngineInterface, delta: number | ((cursor: number, n: number) => number)): Promise<void> {
   const doc = await read($, docA)
   if (!doc || doc.blocks.length === 0) return
   const n = doc.blocks.length
   const target = typeof delta === 'number' ? doc.cursor + delta : delta(doc.cursor, n)
-  const cursor = Math.max(0, Math.min(n - 1, target))
-  if (cursor === doc.cursor) return
-  await update($, docA, d => (d ? { ...d, cursor } : d))
-  void $.ui.scroll({ to: { key: `blk:${cursor}` }, in: PANE, block: 'nearest' }).catch(() => undefined)
-  void $.ui.focus({ requestId: PANE, key: `b:${cursor}` }).catch(() => undefined)
+  await setCursor($, Math.max(0, Math.min(n - 1, target)))
+}
+
+/** Moves to the next changed block after the cursor, wrapping around. */
+async function nextChange($: EngineInterface): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  if (doc.changed.length === 0) {
+    $.ui.toast('spec-review: nothing differs from the version you reviewed.')
+    return
+  }
+  const after = doc.changed.find(i => i > doc.cursor)
+  await setCursor($, after ?? doc.changed[0] ?? doc.cursor)
+}
+
+async function toggleView($: EngineInterface): Promise<void> {
+  await update($, docA, d => (d ? { ...d, view: d.view === 'diff' ? ('document' as const) : ('diff' as const) } : d))
+  await update($, composerA, () => null)
+  void $.ui.scroll({ to: 'start', in: PANE }).catch(() => undefined)
+}
+
+/** Takes the current text as the version reviewed: the diff empties. */
+async function markReviewed($: EngineInterface): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  await update($, docA, d => (d ? { ...withBaseline(d, d.text), view: 'document' as const, awaitingRevision: false } : d))
+  await update($, noticeA, () => `Revision ${doc.revision} marked as reviewed.`)
+  await persist($)
 }
 
 async function openComposer($: EngineInterface, mode: 'comment' | 'ask', blockIndex?: number): Promise<void> {
   const doc = await read($, docA)
   if (!doc || doc.blocks.length === 0) return
   const at = blockIndex ?? doc.cursor
-  if (at !== doc.cursor) await update($, docA, d => (d ? { ...d, cursor: at } : d))
+  if (at !== doc.cursor || doc.view !== 'document') await update($, docA, d => (d ? { ...d, cursor: at, view: 'document' as const } : d))
   await update($, composerA, () => ({ blockIndex: at, mode }))
   void $.ui.scroll({ to: { key: `blk:${at}` }, in: PANE, block: 'nearest' }).catch(() => undefined)
   void $.ui.focus({ requestId: PANE, key: 'compose' }).catch(() => undefined)
+}
+
+/**
+ * The composer for a surface with no text field (mobile): the engine's own
+ * dialog, whose "Other" takes free text.
+ */
+async function composeViaDialog($: EngineInterface, mode: 'comment' | 'ask', blockIndex?: number): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc || doc.blocks.length === 0) return
+  const at = blockIndex ?? doc.cursor
+  const block = doc.blocks[at]
+  if (!block) return
+  if (at !== doc.cursor) await update($, docA, d => (d ? { ...d, cursor: at } : d))
+
+  const other = mode === 'ask' ? 'Comment instead' : 'Ask instead'
+  let answer: string
+  try {
+    answer = await $.ui.ask(`About "${excerpt(block, 80)}": what is your ${mode === 'ask' ? 'question' : 'comment'}?`, {
+      options: ['Cancel', other],
+      header: mode === 'ask' ? 'Ask' : 'Comment',
+    })
+  } catch {
+    return
+  }
+  if (answer === 'Cancel' || answer.trim() === '') return
+  if (answer === other) {
+    await composeViaDialog($, mode === 'ask' ? 'comment' : 'ask', at)
+    return
+  }
+  if (mode === 'ask') await ask($, doc, block, answer.trim())
+  else await addComment($, block, answer.trim())
 }
 
 async function addComment($: EngineInterface, block: SpecReviewBlock, text: string): Promise<void> {
   const comment: SpecReviewComment = { id: newId('c'), anchor: anchorFor(block), text, isOrphan: false }
   await update($, commentsA, list => [...list, comment])
   await update($, composerA, () => null)
+  await persist($)
+}
+
+async function removeComment($: EngineInterface, id: string): Promise<void> {
+  await update($, commentsA, list => list.filter(x => x.id !== id))
+  await persist($)
+}
+
+async function dismissThread($: EngineInterface, id: string): Promise<void> {
+  await update($, threadsA, list => list.filter(x => x.id !== id))
+  await persist($)
 }
 
 async function ask($: EngineInterface, doc: SpecReviewDoc, block: SpecReviewBlock, question: string): Promise<void> {
@@ -218,6 +402,7 @@ async function ask($: EngineInterface, doc: SpecReviewDoc, block: SpecReviewBloc
       return { ...t, status: 'failed', failure: why }
     }),
   )
+  await persist($)
 }
 
 async function submitReview($: EngineInterface): Promise<void> {
@@ -234,8 +419,13 @@ async function submitReview($: EngineInterface): Promise<void> {
     await update($, noticeA, () => `Review not sent: ${sent.drop}`)
     return
   }
+  const now = await $.clock.now()
   await update($, commentsA, () => [])
+  // The version reviewed is the one the comments were made on: the next
+  // revision diffs against it.
+  await update($, docA, d => (d ? { ...withBaseline(d, d.text), awaitingRevision: true, lastReviewAt: now } : d))
   await update($, noticeA, () => `Review sent with ${comments.length} ${comments.length === 1 ? 'comment' : 'comments'}. The pane refreshes when the file changes.`)
+  await persist($)
 }
 
 async function approve($: EngineInterface, phrase: string): Promise<void> {
@@ -263,8 +453,11 @@ async function approve($: EngineInterface, phrase: string): Promise<void> {
     await update($, noticeA, () => `Approval not sent: ${sent.drop}`)
     return
   }
+  const now = await $.clock.now()
   await update($, commentsA, () => [])
+  await update($, docA, d => (d ? { ...withBaseline(d, d.text), awaitingRevision: false, lastReviewAt: now } : d))
   await update($, noticeA, () => 'Approval sent.')
+  await persist($)
 }
 
 async function escalate($: EngineInterface, thread: SpecReviewThread): Promise<void> {
@@ -281,6 +474,7 @@ async function escalate($: EngineInterface, thread: SpecReviewThread): Promise<v
   }
   await update($, threadsA, list => list.filter(t => t.id !== thread.id))
   await update($, noticeA, () => 'Question sent to the conversation.')
+  await persist($)
 }
 
 async function keepAsComment($: EngineInterface, thread: SpecReviewThread): Promise<void> {
@@ -293,6 +487,7 @@ async function keepAsComment($: EngineInterface, thread: SpecReviewThread): Prom
   }
   await update($, commentsA, list => [...list, comment])
   await update($, threadsA, list => list.filter(t => t.id !== thread.id))
+  await persist($)
 }
 
 // ---- drawing ---------------------------------------------------------------
@@ -301,17 +496,62 @@ function capMarkdown(text: string): string {
   return text.length > MARKDOWN_CAP ? `${text.slice(0, MARKDOWN_CAP)}\n\n_…block truncated for display…_` : text
 }
 
-function drawPane($: EngineInterface, args: {
-  t: Table
-  Input: ElementConstructor<InputProps> | null
-  doc: SpecReviewDoc | null
-  comments: readonly SpecReviewComment[]
-  threads: readonly SpecReviewThread[]
-  composer: SpecReviewComposer
-  notice: string | null
-  bodyRows: number
-  approvePhrase: string
-}): RenderElement {
+function capHunk(hunk: string): string {
+  if (hunk.length <= CODE_CAP) return hunk
+  // Cut on a line so the hunk still parses; the header stays whole.
+  const cut = hunk.lastIndexOf('\n', CODE_CAP)
+  return hunk.slice(0, cut > 0 ? cut : CODE_CAP)
+}
+
+function drawDiff($: EngineInterface, t: Table, doc: SpecReviewDoc, notice: string | null): RenderElement {
+  const { Box, Text, Button, Code } = t
+  const d = diffText(doc.baselineText, doc.text)
+
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row" gap={1}>
+        <Text bold>{doc.title}</Text>
+        <Text dimColor>{doc.path}</Text>
+      </Box>
+      <Text dimColor>
+        diff against the version you reviewed
+        {d ? ` · +${d.added} −${d.removed} lines · ${doc.changed.length} ${doc.changed.length === 1 ? 'block' : 'blocks'} changed` : ''}
+        {doc.revision > 0 ? ` · revision ${doc.revision}` : ''}
+      </Text>
+      {notice && <Text color="green">{notice}</Text>}
+      <Box flexDirection="row" gap={2} marginBottom={1}>
+        <Button key="diff" plain hotkey="d" label="document" onPress={() => void toggleView($)} />
+        <Button key="next-change" plain hotkey="n" label="next change" onPress={() => void nextChange($)} />
+        <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />
+        <Button key="close" plain hotkey="x" label="close" onPress={() => void $.ui.close({ id: PANE })} />
+      </Box>
+      {!d && <Text dimColor>The two versions are too long to diff here.</Text>}
+      {d && d.hunks.length === 0 && <Text dimColor>No changes since the version you reviewed.</Text>}
+      {d &&
+        d.hunks.slice(0, MAX_HUNKS).map((hunk, i) => (
+          <Box key={`hunk:${i}`} flexDirection="column" marginBottom={1}>
+            <Code source={capHunk(hunk)} format="diff" wrap="wrap" />
+          </Box>
+        ))}
+      {d && d.hunks.length > MAX_HUNKS && <Text dimColor>… {d.hunks.length - MAX_HUNKS} more hunks not shown</Text>}
+    </Box>
+  )
+}
+
+function drawPane(
+  $: EngineInterface,
+  args: {
+    t: Table
+    Input: ElementConstructor<InputProps> | null
+    doc: SpecReviewDoc | null
+    comments: readonly SpecReviewComment[]
+    threads: readonly SpecReviewThread[]
+    composer: SpecReviewComposer
+    notice: string | null
+    bodyRows: number
+    approvePhrase: string
+  },
+): RenderElement {
   const { t, Input, doc, comments, threads, composer, notice } = args
   const { Box, Text, Button, Markdown } = t
 
@@ -323,6 +563,11 @@ function drawPane($: EngineInterface, args: {
       </Box>
     )
   }
+  if (doc.view === 'diff') return drawDiff($, t, doc, notice)
+
+  // With a text field the composer draws under the block; without one the
+  // engine's dialog takes the text.
+  const compose = (mode: 'comment' | 'ask', at?: number) => (Input ? openComposer($, mode, at) : composeViaDialog($, mode, at))
 
   const n = doc.blocks.length
   const half = Math.max(10, Math.floor(args.bodyRows / 3))
@@ -331,12 +576,14 @@ function drawPane($: EngineInterface, args: {
   const hi = showAll ? n : Math.min(n, lo + half * 2 + 1)
   const live = comments.filter(c => !c.isOrphan)
   const orphans = comments.filter(c => c.isOrphan)
+  const changed = new Set(doc.changed)
 
   const rows: RenderElement[] = []
   for (let i = lo; i < hi; i += 1) {
     const block = doc.blocks[i]
     if (!block) continue
     const isCurrent = i === doc.cursor
+    const isChanged = changed.has(i)
     const own = live.filter(c => c.anchor.blockIndex === i)
     const ownThreads = threads.filter(th => th.anchor.blockIndex === i)
 
@@ -344,7 +591,13 @@ function drawPane($: EngineInterface, args: {
       <Box key={`blk:${i}`} flexDirection="column" marginBottom={1}>
         <Box flexDirection="row">
           <Box width={3}>
-            <Button key={`b:${i}`} plain dimColor={!isCurrent} label={isCurrent ? '▶' : '·'} onPress={() => void openComposer($, 'comment', i)} />
+            <Button
+              key={`b:${i}`}
+              plain
+              dimColor={!isCurrent && !isChanged}
+              label={isCurrent ? '▶' : isChanged ? '+' : '·'}
+              onPress={() => void compose('comment', i)}
+            />
           </Box>
           <Box flexDirection="column" flexGrow={1}>
             <Markdown text={capMarkdown(block.text)} dimColor={!isCurrent && composer !== null} />
@@ -358,7 +611,7 @@ function drawPane($: EngineInterface, args: {
                 {c.text}
               </Text>
             </Box>
-            <Button key={`rm:${c.id}`} plain dimColor label="✕" onPress={() => void update($, commentsA, list => list.filter(x => x.id !== c.id))} />
+            <Button key={`rm:${c.id}`} plain dimColor label="✕" onPress={() => void removeComment($, c.id)} />
           </Box>
         ))}
         {ownThreads.map(th => (
@@ -373,7 +626,7 @@ function drawPane($: EngineInterface, args: {
               <Box flexDirection="row" gap={1}>
                 <Button key={`keep:${th.id}`} plain label="keep as comment" onPress={() => void keepAsComment($, th)} />
                 <Button key={`send:${th.id}`} plain label="send to conversation" onPress={() => void escalate($, th)} />
-                <Button key={`drop:${th.id}`} plain dimColor label="dismiss" onPress={() => void update($, threadsA, list => list.filter(x => x.id !== th.id))} />
+                <Button key={`drop:${th.id}`} plain dimColor label="dismiss" onPress={() => void dismissThread($, th.id)} />
                 {th.status === 'answered' && th.outputTokens !== undefined && (
                   <Text dimColor>
                     {th.outputTokens} out · {th.cachedTokens ?? 0} cached
@@ -383,25 +636,21 @@ function drawPane($: EngineInterface, args: {
             )}
           </Box>
         ))}
-        {composer && composer.blockIndex === i && (
+        {composer && composer.blockIndex === i && Input && (
           <Box flexDirection="row" marginLeft={3} gap={1}>
-            {Input ? (
-              <Input
-                key="compose"
-                autoFocus
-                label={composer.mode === 'ask' ? 'ask:' : 'comment:'}
-                placeholder={composer.mode === 'ask' ? 'a question about this passage' : 'what should change here'}
-                submitLabel={composer.mode === 'ask' ? 'ask' : 'add'}
-                onSubmit={value => {
-                  const text = value.trim()
-                  if (text === '') return
-                  if (composer.mode === 'ask') void ask($, doc, block, text)
-                  else void addComment($, block, text)
-                }}
-              />
-            ) : (
-              <Text dimColor>This surface has no text field; comment from a desktop or terminal.</Text>
-            )}
+            <Input
+              key="compose"
+              autoFocus
+              label={composer.mode === 'ask' ? 'ask:' : 'comment:'}
+              placeholder={composer.mode === 'ask' ? 'a question about this passage' : 'what should change here'}
+              submitLabel={composer.mode === 'ask' ? 'ask' : 'add'}
+              onSubmit={value => {
+                const text = value.trim()
+                if (text === '') return
+                if (composer.mode === 'ask') void ask($, doc, block, text)
+                else void addComment($, block, text)
+              }}
+            />
             <Button key="cancel" plain dimColor label="cancel" onPress={() => void update($, composerA, () => null)} />
           </Box>
         )}
@@ -420,16 +669,21 @@ function drawPane($: EngineInterface, args: {
         {orphans.length > 0 ? ` (${orphans.length} orphaned)` : ''}
         {threads.length > 0 ? ` · ${threads.length} ${threads.length === 1 ? 'question' : 'questions'}` : ''}
         {doc.revision > 0 ? ` · revision ${doc.revision}` : ''}
+        {doc.changed.length > 0 ? ` · ${doc.changed.length} changed since reviewed` : ''}
+        {doc.awaitingRevision ? ' · awaiting revision' : ''}
       </Text>
       {notice && <Text color="green">{notice}</Text>}
       <Box flexDirection="row" gap={2} marginBottom={1}>
         <Button key="next" plain hotkey="j" label="next" onPress={() => void moveCursor($, 1)} />
         <Button key="prev" plain hotkey="k" label="prev" onPress={() => void moveCursor($, -1)} />
         <Button key="top" plain hotkey="g" label="top" onPress={() => void moveCursor($, () => 0)} />
-        <Button key="comment" plain hotkey="c" label="comment" onPress={() => void openComposer($, 'comment')} />
-        <Button key="ask" plain hotkey="a" label="ask" onPress={() => void openComposer($, 'ask')} />
+        <Button key="comment" plain hotkey="c" label="comment" onPress={() => void compose('comment')} />
+        <Button key="ask" plain hotkey="a" label="ask" onPress={() => void compose('ask')} />
         <Button key="submit" plain hotkey="s" label={`submit review${live.length > 0 ? ` (${live.length})` : ''}`} onPress={() => void submitReview($)} />
         <Button key="approve" plain hotkey="o" label="approve" onPress={() => void approve($, args.approvePhrase)} />
+        {doc.changed.length > 0 && <Button key="next-change" plain hotkey="n" label="next change" onPress={() => void nextChange($)} />}
+        {doc.changed.length > 0 && <Button key="diff" plain hotkey="d" label="diff" onPress={() => void toggleView($)} />}
+        {doc.changed.length > 0 && <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />}
         <Button key="close" plain hotkey="x" label="close" onPress={() => void $.ui.close({ id: PANE })} />
       </Box>
       {lo > 0 && <Text dimColor>… {lo} more above (k to move up)</Text>}
@@ -443,7 +697,7 @@ function drawPane($: EngineInterface, args: {
               <Text dimColor wrap="wrap">
                 ✎ {c.anchor.quote.slice(0, 60)}… : {c.text}
               </Text>
-              <Button key={`rm:${c.id}`} plain dimColor label="✕" onPress={() => void update($, commentsA, list => list.filter(x => x.id !== c.id))} />
+              <Button key={`rm:${c.id}`} plain dimColor label="✕" onPress={() => void removeComment($, c.id)} />
             </Box>
           ))}
         </Box>
@@ -492,7 +746,7 @@ export const register: Register = (on, options) => {
     const opened = await openDoc($, path, true)
     if (!opened.isPlaced) return { text: `${PLUGIN}: the pane is not placed: ${opened.reason}` }
     return {
-      text: `Reviewing ${path}. In the pane: j/k move, c comment, a ask, s submit review, o approve, x close. Tab also walks the blocks.`,
+      text: `Reviewing ${path}. In the pane: j/k move, c comment, a ask, s submit review, o approve, d diff, x close. Tab also walks the blocks.`,
     }
   })
 

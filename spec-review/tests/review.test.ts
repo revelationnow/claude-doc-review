@@ -4,6 +4,7 @@ import type { On, RenderPropsOf } from 'claude-code'
 
 import { parseBlocks, reanchor, anchorFor, describeBlock } from '../hooks/blocks'
 import { globToRegExp } from '../hooks/register'
+import { diffLines, unifiedHunks, diffText, changedBlocks } from '../hooks/diff'
 
 const PLUGIN = 'spec-review'
 const PANE = 'spec-review'
@@ -49,11 +50,12 @@ const PANE_PROPS: RenderPropsOf['Pane'] = {
 }
 
 /** The engine beneath the mod: a file, a working directory, a placed pane, a clock. */
-function standBeneath(on: On, files: Record<string, string>) {
+function standBeneath(on: On, files: Record<string, string>, store: Record<string, unknown> = {}) {
   const opened: { id: string; focus?: true }[] = []
   const submitted: { text: string; asUser?: true }[] = []
   const status: (string | undefined)[] = []
   mock.clock(on, { now: 1_700_000_000_000 })
+  mock.store(on, store)
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.turns', () => ({ value: 7 }))
   // The engine resolves a relative path against the working directory before
@@ -291,6 +293,152 @@ test('a revision of the open file re-anchors comments and marks the lost ones', 
   expect(await ui.find({ type: 'Text', text: /revision 1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /1 comment \(1 orphaned\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /no longer appears/ })).toBeDefined()
+
+  // The surviving comment still sits under its block, two blocks further down.
+  const marker = await ui.findAll({ type: 'Button', text: '+' })
+  expect(marker.length).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /1 changed since reviewed/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// ---- phase 2 ----------------------------------------------------------------
+
+test('a line diff finds the shortest edit and unified hunks carry line numbers', () => {
+  const ops = diffLines(['a', 'b', 'c', 'd'], ['a', 'x', 'c', 'd', 'e'])!
+  expect(ops.map(o => `${o.kind[0]}${o.text}`)).toEqual(['sa', 'db', 'ax', 'sc', 'sd', 'ae'])
+  const hunks = unifiedHunks(ops, 1)
+  expect(hunks).toEqual(['@@ -1,4 +1,5 @@\n a\n-b\n+x\n c\n d\n+e'])
+  expect(diffText('same\ntext', 'same\ntext')!.hunks).toEqual([])
+  expect(diffLines([], ['only'])).toEqual([{ kind: 'add', text: 'only' }])
+})
+
+test('changed blocks are the new or reworded ones, not the moved ones', () => {
+  const before = parseBlocks(PLAN)
+  const after = parseBlocks(PLAN.replace('Keep widgets in sync across devices within five seconds.', 'Keep widgets in sync within two seconds.').replace('## Risks\n', '## Risks\n\nNew risk here.\n'))
+  const changed = changedBlocks(after, before)
+  expect(changed.map(i => after[i]!.text)).toEqual(['Keep widgets in sync within two seconds.', 'New risk here.'])
+})
+
+test('comments and side questions persist in the store and come back in a later open', async ($, on) => {
+  const { submitted } = standBeneath(on, { 'docs/plan.md': PLAN, 'docs/other.md': '# Other\n\nUnrelated.\n' })
+  on('model.fork', () => ({
+    value: {
+      isAnswered: true as const,
+      text: 'An embedded store.',
+      usage: { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 8, cache_creation_input_tokens: 0 },
+    },
+  }))
+  await runReview($, 'docs/plan.md')
+  let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  for (let i = 0; i < 5; i += 1) await ui.press({ key: 'next' })
+  await ui.press({ key: 'comment' })
+  await ui.input({ key: 'compose', text: 'Name the file.' })
+  await ui.press({ key: 'ask' })
+  await ui.input({ key: 'compose', text: 'Why SQLite?' })
+  await ui.unmount()
+
+  // Opening another document clears the pane; coming back restores from the store.
+  await runReview($, 'docs/other.md')
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Text', text: /Name the file/ })).toBeUndefined()
+  await ui.unmount()
+
+  await runReview($, 'docs/plan.md')
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Text', text: /Restored 1 comment and 1 question from an earlier session/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Name the file/ })).toBeDefined()
+  expect(await ui.find({ type: 'Markdown', text: /An embedded store/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'submit', text: /\(1\)/ })).toBeDefined()
+
+  // Sending the review clears the comments in the store too; the question stays.
+  await ui.press({ key: 'submit' })
+  expect(submitted).toHaveLength(1)
+  await ui.unmount()
+  await runReview($, 'docs/other.md')
+  await runReview($, 'docs/plan.md')
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Text', text: /Restored 1 question from an earlier session/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Name the file/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a revision after a submitted review shows a diff, marks changed blocks, and can be marked reviewed', async ($, on) => {
+  const files: Record<string, string> = { 'docs/plan.md': PLAN }
+  standBeneath(on, files)
+  on('tool.call', { tool: 'Write' }, (_, e) => {
+    files[e.file_path] = e.content
+    return { result: { type: 'update', filePath: e.file_path, content: e.content, structuredPatch: [] }, text: 'ok' }
+  })
+  await runReview($, 'docs/plan.md')
+
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Button', key: 'diff' })).toBeUndefined()
+  await ui.press({ key: 'comment' })
+  await ui.input({ key: 'compose', text: 'Name the product.' })
+  await ui.press({ key: 'submit' })
+  expect(await ui.find({ type: 'Text', text: /awaiting revision/ })).toBeDefined()
+
+  const revised = PLAN.replace('# Widget sync plan', '# Acme widget sync plan').replace('## Risks\n', '## Risks\n\nClock skew is bounded by NTP.\n')
+  await $.tool.call({ tool: 'Write', file_path: 'docs/plan.md', content: revised })
+
+  expect(await ui.find({ type: 'Text', text: /awaiting revision/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Revision 1: 2 blocks differ/ })).toBeDefined()
+  expect((await ui.findAll({ type: 'Button', text: '+' })).length).toBe(1) // the title is the cursor's block, drawn as ▶
+
+  await ui.press({ key: 'next-change' })
+  expect(await ui.find({ type: 'Text', text: /block 12\/13/ })).toBeDefined()
+  await ui.press({ key: 'next-change' })
+  expect(await ui.find({ type: 'Text', text: /block 1\/13/ })).toBeDefined()
+
+  await ui.press({ key: 'diff' })
+  const code = await ui.findAll({ type: 'Code' })
+  expect(code.length).toBe(2)
+  expect(code[0]!.props.format).toBe('diff')
+  expect(code[0]!.text).toContain('-# Widget sync plan')
+  expect(code[0]!.text).toContain('+# Acme widget sync plan')
+  expect(code[1]!.text).toContain('+Clock skew is bounded by NTP.')
+  expect(await ui.find({ type: 'Text', text: /\+3 −1 lines/ })).toBeDefined()
+
+  await ui.press({ key: 'reviewed' })
+  expect(await ui.find({ type: 'Code' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Revision 1 marked as reviewed/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'diff' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a document changed since the last session opens with its diff available', async ($, on) => {
+  const files: Record<string, string> = { 'docs/plan.md': PLAN.replace('five seconds', 'two seconds') }
+  // What an earlier session left behind: the text it reviewed.
+  standBeneath(on, files, {
+    'doc:/repo/docs/plan.md': { path: 'docs/plan.md', comments: [], threads: [], baselineText: PLAN, lastReviewAt: 1, updatedAt: 1 },
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Text', text: /The file changed since you last reviewed it: 1 block differs/ })).toBeDefined()
+  await ui.press({ key: 'diff' })
+  expect((await ui.find({ type: 'Code' }))?.text).toContain('+Keep widgets in sync across devices within two seconds.')
+  await ui.unmount()
+})
+
+test('on a surface with no text field, comment and ask go through the dialog', async ($, on) => {
+  const { submitted } = standBeneath(on, { 'docs/plan.md': PLAN })
+  const asked: string[] = []
+  on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
+    const question = e.questions[0]?.question ?? ''
+    asked.push(question)
+    return { result: { questions: e.questions, answers: { [question]: 'Spell out the five-second budget.' } }, text: 'ok' }
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'mobile', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Input' })).toBeUndefined()
+  await ui.press({ key: 'next' })
+  await ui.press({ key: 'next' })
+  await ui.press({ key: 'comment' })
+  expect(asked[0]).toContain('About "Keep widgets in sync across devices within five seconds."')
+  expect(asked[0]).toEndWith('what is your comment?')
+  expect(await ui.find({ type: 'Text', text: /Spell out the five-second budget/ })).toBeDefined()
+  await ui.press({ key: 'submit' })
+  expect(submitted[0]?.text).toContain('Comment: Spell out the five-second budget.')
   await ui.unmount()
 })
 

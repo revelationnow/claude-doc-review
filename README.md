@@ -9,9 +9,9 @@ by block, pin comments, ask side questions that never touch the main
 conversation, and then send every comment as one review, or approve.
 
 The design and the reasoning behind it are in [DESIGN.md](DESIGN.md). This
-README covers what phase 1 does and how to run it.
+README covers what the mod does today and how to run it.
 
-## What phase 1 does
+## What it does
 
 - **Notices a spec or plan.** A `Write` or `Edit` to a path matching the
   configured globs (superpowers' `docs/superpowers/specs/` and `plans/` by
@@ -34,6 +34,18 @@ README covers what phase 1 does and how to run it.
   notes.
 - **Live refresh.** When the model edits the open file, the pane re-reads it
   and re-anchors every comment.
+- **Comments persist across sessions.** Each document's comments, answered
+  side questions and the text you last reviewed are kept in the plugin store.
+  Reopening the file in a later session restores them, and the store keeps
+  the twelve most recently touched documents.
+- **A diff of the revision.** Submitting a review (or pressing `r`) takes the
+  current text as the version you reviewed. When the model revises the file,
+  changed blocks are marked `+` in the margin, `n` jumps between them, and `d`
+  shows the unified diff against the reviewed version. A file that changed
+  between sessions opens with that diff available.
+- **Works without a text field.** On a surface with no `Input` (the mobile
+  app), comment and ask go through the engine's own question dialog, whose
+  free-text answer becomes the comment.
 
 ## Keys in the pane
 
@@ -50,7 +62,12 @@ The pane must hold the keyboard for hotkeys to work: it opens focused from
 | `a` | Ask a side question about the current block |
 | `s` | Submit all comments as one review |
 | `o` | Approve (asks what to do with unsent comments) |
+| `n` | Next block changed since the version you reviewed |
+| `d` | Toggle the diff against the version you reviewed |
+| `r` | Mark the current revision as reviewed (clears the diff) |
 | `x` / `Esc` | Close the pane (comments are kept) |
+
+`n`, `d` and `r` appear only while something differs from the reviewed version.
 
 Under an answered side question: **keep as comment**, **send to
 conversation** (hands the question to the real conversation with the passage
@@ -99,13 +116,13 @@ narrower terminal the mod falls back to a toast and a status line pointing at
 | Terminal, fullscreen | Docked pane, all keys |
 | Terminal, main screen | Inline pane above the prompt, all keys |
 | Desktop app, VS Code | Same as terminal |
-| Mobile | Read and approve only; the app has no text field yet |
+| Mobile | Comment and ask through the question dialog; no inline text field |
 
 ## Developing
 
 ```
 claude plugin validate spec-review   # what the engine will load and refuse
-claude plugin test spec-review       # 13 tests, no terminal needed
+claude plugin test spec-review       # 19 tests, no terminal needed
 ```
 
 Type-checking: once the mod has loaded in a session, the engine lays this
@@ -120,13 +137,22 @@ spec-review/
   hooks/hooks.json             names the hooks module
   hooks/register.tsx           the hooks: tool.call, turn.complete, command.run, ui.*
   hooks/blocks.ts              markdown to blocks; anchors and re-anchoring
+  hooks/diff.ts                line diff, unified hunks, changed-block detection
+  hooks/persist.ts             the shape of the per-document store record
   hooks/review-prompt.ts       the review, ask, escalation and approval texts
   types/index.d.ts             the state contract ($.state under 'spec-review')
   tests/review.test.ts         claude plugin test
 ```
 
-## Not yet (phases 2 and 3)
+## Not yet (phase 3)
 
-Persisting comments across sessions, a diff of the revision, vim-style
-navigation through a `Client` module on terminal and desktop, `/` search, and a
-cheap "explain this term" path on a small model. See DESIGN.md section 8.
+Vim-style navigation through a `Client` module on terminal and desktop, `/`
+search, hover styling, and a cheap "explain this term" path on a small model.
+See DESIGN.md section 8.
+
+## Two rules of the engine worth knowing when editing this
+
+- `$` is followed only into functions declared in the same file. A helper in
+  another module cannot take `$`, which is why `persist.ts` holds shapes and
+  the store calls sit in `register.tsx`.
+- An atom's reference must be written as string literals at the call site.
