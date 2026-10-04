@@ -6,8 +6,8 @@ import { parseBlocks, reanchor, anchorFor, describeBlock, normalizeQuote, tableG
 import { globToRegExp } from '../hooks/register'
 import { diffLines, unifiedHunks, diffText, changedBlocks } from '../hooks/diff'
 
-const PLUGIN = 'spec-review'
-const PANE = 'spec-review'
+const PLUGIN = 'doc-review'
+const PANE = 'doc-review'
 const SURFACES = ['terminal', 'desktop', 'vscode'] as const
 
 const PLAN = `# Widget sync plan
@@ -87,7 +87,7 @@ function standBeneath(on: On, files: Record<string, string>, store: Record<strin
 
 async function runReview($: Engine, path: string) {
   return $.command.run({
-    command: 'spec-review',
+    command: 'doc-review',
     args: path,
     origin: { kind: 'composer' },
     presentation: { isFullscreen: true, columns: 160 },
@@ -134,7 +134,7 @@ test('globs match the default spec and plan locations', () => {
   expect(design.test('a/b/foo-plan.md')).toBe(false)
 })
 
-test('/spec-review opens the pane focused and draws the document', async ($, on) => {
+test('/doc-review opens the pane focused and draws the document', async ($, on) => {
   const { opened } = standBeneath(on, { 'docs/plan.md': PLAN })
 
   const ran = await runReview($, 'docs/plan.md')
@@ -150,10 +150,10 @@ test('/spec-review opens the pane focused and draws the document', async ($, on)
   }
 })
 
-test('/spec-review without a path reports usage', async ($, on) => {
+test('/doc-review without a path reports usage', async ($, on) => {
   standBeneath(on, {})
   const ran = await runReview($, '')
-  expect(ran.text).toContain('Usage: /spec-review')
+  expect(ran.text).toContain('Usage: /doc-review')
   const missing = await runReview($, 'docs/missing.md')
   expect(missing.text).toContain('does not exist')
 })
@@ -508,7 +508,7 @@ test('a spec written this turn opens for review when the model asks for one', as
   expect(opened).toHaveLength(1)
 })
 
-test('with offer set to toast the pane stays closed and the status line points at /spec-review', { options: { offer: 'toast' } }, async ($, on) => {
+test('with offer set to toast the pane stays closed and the status line points at /doc-review', { options: { offer: 'toast' } }, async ($, on) => {
   const files: Record<string, string> = {}
   const { opened, status } = standBeneath(on, files)
   on('tool.call', { tool: 'Write' }, (_, e) => {
@@ -520,7 +520,7 @@ test('with offer set to toast the pane stays closed and the status line points a
   await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/foo-plan.md', content: PLAN })
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 10, answer: 'Plan complete. Please review the plan.' })
   expect(opened).toHaveLength(0)
-  expect(status).toContain('spec ready: /spec-review')
+  expect(status).toContain('spec ready: /doc-review')
 })
 
 // ---- phase 3 ----------------------------------------------------------------
@@ -531,9 +531,9 @@ test('f finds blocks by text, cycles through the matches, and e goes to the end'
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
 
   await ui.press({ key: 'find' })
-  expect(await ui.find({ type: 'Input', key: 'find' })).toBeDefined()
-  await ui.input({ key: 'find', text: 'widget' })
-  expect(await ui.find({ type: 'Input', key: 'find' })).toBeUndefined()
+  expect(await ui.find({ type: 'Input', key: 'find-field' })).toBeDefined()
+  await ui.input({ key: 'find-field', text: 'widget' })
+  expect(await ui.find({ type: 'Input', key: 'find-field' })).toBeUndefined()
   // The title matches and holds the cursor, so the first match is the current block.
   expect(await ui.find({ type: 'Text', text: /find "widget" 1\/3/ })).toBeDefined()
   await ui.press({ key: 'find' })
@@ -552,7 +552,7 @@ test('f finds blocks by text, cycles through the matches, and e goes to the end'
 
   // A find with no match leaves the cursor where it was.
   await ui.press({ key: 'find' })
-  await ui.input({ key: 'find', text: 'kubernetes' })
+  await ui.input({ key: 'find-field', text: 'kubernetes' })
   expect(await ui.find({ type: 'Text', text: /block 13\/13/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /no matches/ })).toBeDefined()
   await ui.unmount()
@@ -629,7 +629,7 @@ test('the explain model is configurable', { options: { explainModel: 'sonnet' } 
   await ui.unmount()
 })
 
-test('/spec-review forget clears the saved comments for a document', async ($, on) => {
+test('/doc-review forget clears the saved comments for a document', async ($, on) => {
   standBeneath(on, { 'docs/plan.md': PLAN, 'docs/other.md': '# Other\n\nUnrelated.\n' })
   await runReview($, 'docs/plan.md')
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
@@ -790,7 +790,7 @@ test('every block carries comment, ask and explain actions, shown on the current
 
   await ui.press({ key: 'act-a:5' })
   expect(await ui.find({ type: 'Text', text: /block 6\/13/ })).toBeDefined()
-  expect((await ui.find({ type: 'Input', key: 'compose' }))?.props.label).toBe('ask:')
+  expect((await ui.find({ type: 'Input', key: 'compose' }))?.props.label).toBe('ask')
   await ui.input({ key: 'compose', text: 'Why one file per user?' })
   expect(asked[0]).toContain('Widgets live in a SQLite file')
 
@@ -917,5 +917,22 @@ test('the scrollbar keeps its size at every pan, whatever the label reads', asyn
   // The label grew from "1–117/..." to three-digit starts; the bar did not move.
   expect(new Set(seen.map(s => s.label.trim().length)).size).toBeGreaterThan(1)
   expect(seen.every(s => s.cells === first.cells && s.label.length === first.label.length)).toBe(true)
+  await ui.unmount()
+})
+
+test('every element in the pane has a key of its own, so focus lands where it is sent', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  const duplicates = async () => {
+    const keys = (await ui.findAll({})).map(e => e.key).filter((k): k is string => typeof k === 'string')
+    return keys.filter((k, i) => keys.indexOf(k) !== i)
+  }
+  expect(await duplicates()).toEqual([])
+  await ui.press({ key: 'find' }) // the find field opens beside the find button
+  expect(await duplicates()).toEqual([])
+  await ui.press({ key: 'find-cancel' })
+  await ui.press({ key: 'comment' })
+  expect(await duplicates()).toEqual([])
   await ui.unmount()
 })

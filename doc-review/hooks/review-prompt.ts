@@ -1,9 +1,9 @@
 // The texts the mod sends to the model: a review, a side question, an approval.
 
-import type { SpecReviewBlock, SpecReviewComment } from '../types'
+import type { DocReviewBlock, DocReviewComment } from '../types'
 import { describeBlock, excerpt, reanchor } from './blocks'
 
-function quoteOf(comment: SpecReviewComment, blocks: readonly SpecReviewBlock[]): string {
+function quoteOf(comment: DocReviewComment, blocks: readonly DocReviewBlock[]): string {
   const at = reanchor(comment.anchor, blocks)
   const block = at === -1 ? undefined : blocks[at]
   if (block) return `${describeBlock(block)}:\n   > ${excerpt(block, 240)}`
@@ -13,8 +13,8 @@ function quoteOf(comment: SpecReviewComment, blocks: readonly SpecReviewBlock[])
 
 export function buildReviewPrompt(args: {
   path: string
-  comments: readonly SpecReviewComment[]
-  blocks: readonly SpecReviewBlock[]
+  comments: readonly DocReviewComment[]
+  blocks: readonly DocReviewBlock[]
 }): string {
   const n = args.comments.length
   const lines = [
@@ -29,7 +29,7 @@ export function buildReviewPrompt(args: {
   return lines.join('\n').trimEnd()
 }
 
-export function buildAskPrompt(args: { path: string; block: SpecReviewBlock; question: string }): string {
+export function buildAskPrompt(args: { path: string; block: DocReviewBlock; question: string }): string {
   return [
     `I am reviewing \`${args.path}\` and have a question about one passage, ${describeBlock(args.block)}:`,
     '',
@@ -43,7 +43,7 @@ export function buildAskPrompt(args: { path: string; block: SpecReviewBlock; que
 
 export function buildEscalationPrompt(args: {
   path: string
-  block: SpecReviewBlock
+  block: DocReviewBlock
   question: string
   answer?: string
 }): string {
@@ -63,8 +63,8 @@ export function buildEscalationPrompt(args: {
 export function buildApprovalPrompt(args: {
   path: string
   phrase: string
-  notes: readonly SpecReviewComment[]
-  blocks: readonly SpecReviewBlock[]
+  notes: readonly DocReviewComment[]
+  blocks: readonly DocReviewBlock[]
 }): string {
   if (args.notes.length === 0) return args.phrase
   const lines = [args.phrase, '', `A few non-blocking notes on \`${args.path}\` you may fold in as you go:`, '']
@@ -77,7 +77,7 @@ export function buildApprovalPrompt(args: {
 }
 
 /** A fresh small model's brief: the passage and the document's title, nothing more. */
-export function buildExplainPrompt(args: { path: string; title: string; block: SpecReviewBlock }): { system: string; prompt: string } {
+export function buildExplainPrompt(args: { path: string; title: string; block: DocReviewBlock }): { system: string; prompt: string } {
   return {
     system:
       'You explain passages of software design documents to their reviewer. Answer in plain words, in at most four short sentences. Define any jargon or acronym the passage uses. Do not evaluate or suggest changes; only explain what it says and means.',
@@ -98,7 +98,7 @@ const STANDALONE_DOC_CAP = 100_000
  * A question asked before the conversation has a reply to fork from: the
  * session's model sees the whole document instead.
  */
-export function buildStandaloneAskPrompt(args: { path: string; title: string; text: string; block: SpecReviewBlock; question: string }): {
+export function buildStandaloneAskPrompt(args: { path: string; title: string; text: string; block: DocReviewBlock; question: string }): {
   system: string
   prompt: string
 } {

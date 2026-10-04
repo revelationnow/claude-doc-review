@@ -1,6 +1,6 @@
 // Markdown to blocks, and anchors that survive a revision of the file.
 
-import type { SpecReviewAnchor, SpecReviewBlock, SpecReviewBlockKind } from '../types'
+import type { DocReviewAnchor, DocReviewBlock, DocReviewBlockKind } from '../types'
 
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/
@@ -14,13 +14,13 @@ export function cleanText(text: string): string {
   return text.replace(/\r/g, '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
 }
 
-export function parseBlocks(text: string): SpecReviewBlock[] {
+export function parseBlocks(text: string): DocReviewBlock[] {
   const lines = cleanText(text).split('\n')
-  const blocks: SpecReviewBlock[] = []
+  const blocks: DocReviewBlock[] = []
   const stack: { level: number; title: string }[] = []
   let i = 0
 
-  const push = (kind: SpecReviewBlockKind, start: number, end: number, headingPath: string[], depth?: number) => {
+  const push = (kind: DocReviewBlockKind, start: number, end: number, headingPath: string[], depth?: number) => {
     const slice = lines.slice(start, end + 1)
     // An item is drawn on its own, so its indent goes: four spaces would make it code.
     const body = (depth === undefined ? slice : dedent(slice, indentOf(slice[0] ?? ''))).join('\n').trimEnd()
@@ -225,14 +225,14 @@ export function codeParts(markdown: string): { language?: string; lines: string[
 }
 
 /** The widest line a block draws unwrapped: a table's grid, a code block's lines. */
-export function unwrappedLines(block: Pick<SpecReviewBlock, 'kind' | 'text'>): string[] | null {
+export function unwrappedLines(block: Pick<DocReviewBlock, 'kind' | 'text'>): string[] | null {
   if (block.kind === 'table') return tableGrid(block.text)
   if (block.kind === 'code') return codeParts(block.text).lines
   return null
 }
 
 /** The document's title: its first heading, else its file name. */
-export function titleOf(blocks: readonly SpecReviewBlock[], path: string): string {
+export function titleOf(blocks: readonly DocReviewBlock[], path: string): string {
   const first = blocks.find(b => b.kind === 'heading')
   return first ? plainText(first.text) : basename(path)
 }
@@ -258,7 +258,7 @@ export function normalizeQuote(markdown: string): string {
   return plainText(markdown).toLowerCase().slice(0, 200)
 }
 
-export function anchorFor(block: SpecReviewBlock): SpecReviewAnchor {
+export function anchorFor(block: DocReviewBlock): DocReviewAnchor {
   return {
     headingPath: [...block.headingPath],
     quote: normalizeQuote(block.text),
@@ -271,7 +271,7 @@ export function anchorFor(block: SpecReviewBlock): SpecReviewAnchor {
  * first, then a quote under the same heading sharing a long prefix, then the
  * index hint when its block still shares a short prefix. -1 when none.
  */
-export function reanchor(anchor: SpecReviewAnchor, blocks: readonly SpecReviewBlock[]): number {
+export function reanchor(anchor: DocReviewAnchor, blocks: readonly DocReviewBlock[]): number {
   const quotes = blocks.map(b => normalizeQuote(b.text))
   const exact = quotes.findIndex(q => q === anchor.quote && q !== '')
   if (exact !== -1) return exact
@@ -305,12 +305,12 @@ function sameHeading(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /** The first `max` characters of a block as plain text, with an ellipsis when cut. */
-export function excerpt(block: Pick<SpecReviewBlock, 'text'>, max = 160): string {
+export function excerpt(block: Pick<DocReviewBlock, 'text'>, max = 160): string {
   const plain = plainText(block.text)
   return plain.length > max ? `${plain.slice(0, max - 1).trimEnd()}…` : plain
 }
 
-const WHAT: Record<SpecReviewBlockKind, string> = {
+const WHAT: Record<DocReviewBlockKind, string> = {
   heading: 'the heading',
   paragraph: 'the paragraph',
   list: 'the list',
@@ -322,7 +322,7 @@ const WHAT: Record<SpecReviewBlockKind, string> = {
 }
 
 /** "Under 'A > B', the paragraph beginning '…'" for a prompt. */
-export function describeBlock(block: SpecReviewBlock): string {
+export function describeBlock(block: DocReviewBlock): string {
   const where = block.headingPath.length > 0 ? `under "${block.headingPath.join(' > ')}"` : 'at the top of the document'
   const what = WHAT[block.kind]
   return `${where}, ${what} beginning "${excerpt(block, 100)}"`

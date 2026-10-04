@@ -1,211 +1,160 @@
-# spec-review
+# claude-doc-review
 
-A Claude Code mod that turns "please review the plan" into a real review.
+**Review Claude's design docs and plans like a pull request, without leaving
+the terminal.**
 
-When a plugin such as [superpowers](https://github.com/obra/superpowers) writes
-a design spec or an implementation plan and asks you to look at it, this mod
-opens the document in a pane beside the conversation. You move through it block
-by block, pin comments, ask side questions that never touch the main
-conversation, and then send every comment as one review, or approve.
+When Claude writes a spec or a plan and says "please review it", you usually
+scroll the file, then type a long reply that quotes the parts you mean.
+claude-doc-review opens the document in a pane beside the conversation
+instead. You step through it block by block, pin comments on single
+paragraphs, bullets or table rows, and ask side questions that never enter
+the main conversation. When you're done, every comment goes back to Claude as
+one review.
 
-The design and the reasoning behind it are in [DESIGN.md](DESIGN.md). This
-README covers what the mod does today and how to run it.
+![claude-doc-review in action: opening DESIGN.md, panning a wide table, commenting on a bullet, asking a side question, explaining a passage on haiku, and submitting the review](docs/demo.gif)
+
+<sub>Recorded with asciinema in a real terminal, reviewing this repo's own
+[DESIGN.md](DESIGN.md). To replay it at full fidelity, run
+`asciinema play docs/demo.cast`.</sub>
+
+## Why
+
+- **One review, one revision.** All comments go back as a single prompt,
+  each one anchored by heading path and quote. Claude revises the document
+  once and keeps it coherent, instead of patching it piece by piece.
+- **Side questions stay on the side.** "What does this paragraph mean?"
+  doesn't belong in the main transcript. Asks are answered by a fork of the
+  session, which reuses the cached prefix, so they're cheap and leave no
+  trace in the conversation.
+- **Comments land exactly where you mean.** Every heading, paragraph, list
+  item, table and code fence is its own stop, and comments follow their
+  passage when Claude edits the file.
+
+## Quick start
+
+```sh
+git clone https://github.com/revelationnow/claude-doc-review
+claude --plugin-dir ./claude-doc-review/doc-review
+```
+
+Then, inside Claude Code:
+
+```
+/doc-review docs/superpowers/specs/2026-10-04-widgets-design.md
+```
+
+You can also skip the command. When a plugin such as
+[superpowers](https://github.com/obra/superpowers) writes a spec or plan and
+asks for a review, the pane opens by itself.
+
+To load it in every session, add the absolute path of `doc-review/` to
+`CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`.
 
 ## What it does
 
-- **Notices a spec or plan.** A `Write` or `Edit` to a path matching the
-  configured globs (superpowers' `docs/superpowers/specs/` and `plans/` by
-  default) marks it as a candidate. When the model's turn ends with a review
-  request, or names the file, the pane opens on it.
-- **`/spec-review [path]`** opens any markdown file for review, or the most recent
-  candidate when no path is given. (Not `/review`: Claude Code's built-in
-  `/review` reviews pull requests.)
-- **Blocks, not lines.** The document is split into markdown blocks (heading,
-  paragraph, list item, code fence, table, quote). Each block is a focus stop.
-  Every list item is a stop of its own, nested items included (drawn indented
-  under their parent), so a comment or question can land on one bullet. A
-  comment made on a whole list by an earlier version moves to its first item.
-- **Tables and code never wrap.** A table is laid out as an aligned grid and a
-  code fence as highlighted code, both cut at the pane's edge rather than
-  broken across lines. When one is wider than the pane, a dim line under it
-  says which columns show, and `p` on it scrolls it sideways. Prose wraps as
-  before. Below 70 columns the gutter narrows, the path takes its own line and
-  the key row wraps instead of running off the edge.
-- **Comments are anchored by content.** A comment remembers the heading path
-  and the opening text of its block, so it survives the model revising the
-  file. When a passage disappears, the comment is kept and marked orphaned.
-- **Side questions via `model.fork`.** Asking a question runs one completion
-  over the session's own transcript, so the model already has the spec in
-  context and the answer never enters the conversation. Each answer shows its
-  output and cached token counts. In a fresh session, or right after `/clear`,
-  there is no transcript to fork yet; the question then goes to the session's
-  model with the whole document attached, and the answer says so.
-- **One review, one revision.** Submitting sends all comments as a single
-  prompt in your words, anchored by heading and quote. Approving sends the
-  approval phrase, optionally with unsent comments folded in as non-blocking
-  notes.
-- **Live refresh.** When the model edits the open file, the pane re-reads it
-  and re-anchors every comment.
-- **Comments persist across sessions.** Each document's comments, answered
-  side questions and the text you last reviewed are kept in the plugin store.
-  Reopening the file in a later session restores them, and the store keeps
-  the twelve most recently touched documents.
-- **A diff of the revision.** Submitting a review (or pressing `r`) takes the
-  current text as the version you reviewed. When the model revises the file,
-  changed blocks are marked `+` in the margin, `n` jumps between them, and `d`
-  shows the unified diff against the reviewed version. A file that changed
-  between sessions opens with that diff available.
-- **Works without a text field.** On a surface with no `Input` (the mobile
-  app), comment and ask go through the engine's own question dialog, whose
-  free-text answer becomes the comment.
-- **Find, and cycle.** `f` opens a find field; matches are counted in the
-  header and `f` again moves to the next one. `m` cycles through the blocks
-  that carry comments or questions, `e` jumps to the end.
-- **Explain on a small model.** `h` asks a fresh small model (`haiku` by
-  default) to explain the current passage in plain words. It sees only the
-  passage and the document's title, never the conversation, so it costs a few
-  hundred tokens and leaves no trace in the transcript.
-- **Forget.** `/spec-review forget [path]` clears a document's saved comments and
-  questions, in the pane and in the store.
+| | |
+| --- | --- |
+| **Spots specs and plans** | A `Write` or `Edit` to a path that matches the configured globs marks the file as a candidate. When Claude's turn ends with a review request or names the file, the pane opens. |
+| **`/doc-review [path]`** | Opens any markdown file, or the latest candidate when no path is given. |
+| **Blocks, not lines** | Each heading, paragraph, list item (nested ones too), code fence, table and quote is a focus stop. |
+| **Tables and code never wrap** | Tables are drawn as aligned grids and code as highlighted code, both cut at the pane's edge. A scrollbar under each wide block pans it sideways with the mouse, or use `p`. |
+| **Anchored comments** | A comment remembers its heading path and opening text, so it survives revisions. If its passage is deleted, the comment is kept and marked orphaned. |
+| **Side questions** (`a`) | Answered by `model.fork` over the session's own transcript. Each answer shows its output and cached token counts. In a fresh session the question goes to the session model with the whole document attached. |
+| **Explain** (`h`) | A fresh small model (`haiku` by default) explains the passage in plain words. It sees only the passage and the document's title, so it costs a few hundred tokens. |
+| **Escalate** | Under each answer: *keep as comment*, *send to conversation* (with the passage attached as hidden context), or *dismiss*. |
+| **Submit or approve** | `s` sends every comment as one review. `o` sends your approval phrase and can fold unsent comments in as non-blocking notes. |
+| **Live refresh and diff** | When Claude edits the open file, the pane re-reads it and re-anchors comments. Changed blocks get a `+` in the margin, `n` jumps between them, and `d` shows the diff against the version you reviewed. |
+| **Persistence** | Comments, answered questions and the last-reviewed text are saved per document across sessions, for the twelve most recently touched documents. `/doc-review forget [path]` clears one. |
+| **Find and cycle** | `f` finds text. `m` cycles through blocks that have comments. `g` and `e` jump to the top and end. |
 
-## Keys in the pane
+## Keys
 
-The pane must hold the keyboard for hotkeys to work: it opens focused from
-`/spec-review`, or press `ctrl+x tab` or click it.
+Hotkeys work while the pane has the keyboard. It opens focused from
+`/doc-review`; otherwise click it or press `ctrl+x tab`.
 
 | Key | Action |
 | --- | --- |
-| `j` / `k` | Next / previous block (each list item is one) |
-| `g` / `e` | Top / end of the document |
-| `f` | Find text; again for the next match |
+| `j` / `k` | Next / previous block |
+| `g` / `e` | Top / end |
+| `f` | Find; press again for the next match |
 | `m` | Next block with a comment or question |
-| `Tab` / `Shift+Tab` | Walk the blocks and their actions (the focus ring) |
-| `Enter` on the current block's marker | Comment on that block |
-| `c` | Comment on the current block |
-| `a` | Ask a side question about the current block |
-| `h` | Explain the current block on a small fresh model |
+| `Tab` / `Shift+Tab` | Walk the blocks and their actions |
+| `c`, or `Enter` on the current marker | Comment |
+| `a` | Ask a side question |
+| `h` | Explain on a small model |
+| `p` | Pan a wide table or code block sideways |
 | `s` | Submit all comments as one review |
-| `o` | Approve (asks what to do with unsent comments) |
-| `p` | Pan the current table or code block sideways (only when it is wider than the pane) |
-| `n` | Next block changed since the version you reviewed |
-| `d` | Toggle the diff against the version you reviewed |
-| `r` | Mark the current revision as reviewed (clears the diff) |
+| `o` | Approve |
+| `n` / `d` / `r` | Next changed block / toggle diff / mark as reviewed (shown only after a revision) |
 | `x` / `Esc` | Close the pane (comments are kept) |
-
-`n`, `d` and `r` appear only while something differs from the reviewed version.
-
-Under an answered side question: **keep as comment**, **send to
-conversation** (hands the question to the real conversation with the passage
-as context), or **dismiss**.
 
 ## Mouse
 
-Where the surface reports the mouse (the terminal in fullscreen, the desktop
-app, VS Code), everything is clickable; on the terminal's main screen the
-mouse never reaches the pane, so it is keys only there.
+The mouse works wherever the surface reports it: fullscreen terminal, the
+desktop app and VS Code.
 
-- **Select a block:** click its marker in the left gutter (`·`, `+`). A
-  second click on the current block's marker (`▶`) opens a comment.
-- **Act on a block:** the current block shows `comment · ask · explain` in
-  the blank row under it; any other block shows the same row while the
-  pointer is over it, so one click comments on, asks about or explains any
-  block, list items included. The row sits in the gap between blocks, so
-  revealing it moves nothing.
-- **Every key is also a button:** the row at the top (next, find, submit
-  review, approve, diff, close, …), the answers' keep, send and dismiss, the
-  ✕ on a comment, and the approve dialog's choices.
-- **Wheel:** scrolls the pane. A document of up to 200 blocks is drawn whole;
-  a longer one is drawn as a window around the current block, and the wheel
-  at the window's edge moves the window on.
-- **Wide tables and code:** every one wider than the pane has a scrollbar
-  under it, `‹ ───━━━━━─── › 41–88/102`. Click anywhere on the track and the
-  thumb centres there; click `‹` or `›` to step a screen at a time. A click on
-  the bar of a block that is not current selects it too. The engine reports
-  no sideways wheel, so this is the mouse's way across; `p` does the same
-  from the keyboard. The bar is made of buttons, so it works the same on
-  every surface and never takes the keyboard from the pane. There is no
-  drag: see below.
-
-## Running it
-
-From a terminal, for one session:
-
-```
-claude --plugin-dir ./spec-review
-```
-
-For every session, add the folder's absolute path to `CLAUDE_CODE_PLUGIN_DIRS`
-in the `env` block of `~/.claude/settings.json`. The folder is watched, so a
-saved edit hot-reloads the mod.
-
-Then open a spec:
-
-```
-/spec-review docs/superpowers/specs/2026-10-04-widgets-design.md
-```
-
-Or just let superpowers finish a brainstorm or a plan; the pane offers itself.
+- **Click a block's marker** (`·`) to select it. Click the current marker
+  (`▶`) to comment.
+- **Hover a block** to show `comment · ask · explain` in the gap under it.
+  Showing the row doesn't shift the layout.
+- **Every key has a button**, including the toolbar, the answer actions, the
+  ✕ on a comment, and the approve dialog.
+- **The wheel scrolls the pane.** Documents with more than 200 blocks are
+  drawn as a window around the current block, and the wheel moves the window
+  at its edges.
+- **Wide tables and code** have a bar under them: `‹ ───━━━━━─── › 41–88/102`.
+  Click the track to jump there, or click `‹` and `›` to step a screen at a
+  time.
 
 ## Configuration
 
-Set in the config menu (`/config`) or under `pluginConfigs.spec-review` in
-settings.
+Set these in `/config` or under `pluginConfigs.doc-review` in settings.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `globs` | superpowers specs and plans, `docs/plans`, `*-design.md`, `*-plan.md`, `SPEC.md`, `PLAN.md` | Comma-separated globs of documents that count |
-| `offer` | `auto` | `auto` opens the pane when a review is asked for; `toast` only shows a toast and status line; `off` leaves it to `/spec-review` |
+| `globs` | superpowers specs and plans, `docs/plans`, `docs/specs`, `*-design.md`, `*-plan.md`, `SPEC.md`, `PLAN.md` | Comma-separated globs of documents that count |
+| `offer` | `auto` | `auto` opens the pane when a review is requested. `toast` only shows a toast and status line. `off` means `/doc-review` only. |
 | `approvePhrase` | `Looks good, proceed.` | What `o` sends as your words |
 | `explainModel` | `haiku` | The model alias or id behind `h` |
 
-Note on `auto`: a pane opened without a user action is only placed on
-terminals 144 columns or wider (110 once you have opened it yourself). On a
-narrower terminal the mod falls back to a toast and a status line pointing at
-`/spec-review`, which places the pane at any width.
+With `auto`, a pane that opens without a user action needs a terminal at
+least 144 columns wide (110 once you've opened it yourself). On a narrower
+terminal you get a toast pointing at `/doc-review`, which opens the pane at
+any width.
 
-## Surfaces
+## Where it runs
 
 | Surface | Support |
 | --- | --- |
-| Terminal, fullscreen | Docked pane, all keys |
-| Terminal, main screen | Inline pane above the prompt, all keys |
-| Desktop app (Code tab) | Docked pane beside the transcript; click it for the keys. See below |
-| VS Code | Same as desktop: docked pane, mouse, text field. Load it through `CLAUDE_CODE_PLUGIN_DIRS` as for desktop |
-| Mobile | Comment and ask through the question dialog; no inline text field |
+| Terminal, fullscreen | Docked pane, keys and mouse |
+| Terminal, main screen | Inline pane above the prompt, keys only |
+| Desktop app (Code tab) | Docked pane, mouse, and the app's own text field and Markdown |
+| VS Code | Same as the desktop app |
+| Mobile | Comment and ask through the question dialog |
 
-### In the desktop app
+The desktop app and VS Code start sessions themselves, so `--plugin-dir`
+isn't available there. Load the mod in one of two ways:
 
-The desktop app's Code tab runs the same engine on this machine, so the mod
-loads there unchanged; only the way it is loaded differs, since the app starts
-sessions itself and no `--plugin-dir` flag can be given. Either:
-
-- add the folder's absolute path to `CLAUDE_CODE_PLUGIN_DIRS` in the `env`
-  block of `~/.claude/settings.json` (also add `"CLAUDE_CODE_PLUGIN_DIR_WATCH":
-  "1"` there if you want saved edits to hot-reload in desktop sessions), or
-- add this repository as a folder marketplace (`claude plugin marketplace add
-  <folder>`), install from it, and run `/reload-plugins` after an edit.
-
-On desktop the pane draws through the app's own element table: the text
-field, buttons and Markdown are the app's, and tables and code use its code
-font, so the grid stays aligned. Hotkeys reach the pane once you click it.
-The tests mount every view on both `terminal` and `desktop`, which checks the
-tree against each surface's rules; they do not check the desktop app's paint.
+- Put its path in `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. Add
+  `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"` if you want edits to hot-reload.
+- Add this repo as a folder marketplace (`claude plugin marketplace add
+  <folder>`), install the plugin from it, and run `/reload-plugins` after
+  each edit.
 
 ## Developing
 
-```
-claude plugin validate spec-review   # what the engine will load and refuse
-claude plugin test spec-review       # 35 tests, no terminal needed
+```sh
+claude plugin validate doc-review   # what the engine will load and refuse
+claude plugin test doc-review       # 38 tests, no terminal needed
+npx -p typescript@5 tsc -p doc-review
 ```
 
-Type-checking: once the mod has loaded in a session, the engine lays this
-build's API declarations under `spec-review/.claude-plugin/types/`, and
-`tsc -p spec-review` type-checks against them.
-
-Layout:
+Type-checking needs the API declarations that the engine writes under
+`doc-review/.claude-plugin/types/` the first time the mod loads in a session.
+The tests mount every view on the terminal, desktop and VS Code surfaces.
 
 ```
-spec-review/
+doc-review/
   .claude-plugin/plugin.json   manifest, userConfig, types contract
   hooks/hooks.json             names the hooks module
   hooks/register.tsx           the hooks: tool.call, turn.complete, command.run, ui.*
@@ -213,39 +162,27 @@ spec-review/
   hooks/diff.ts                line diff, unified hunks, changed-block detection
   hooks/persist.ts             the shape of the per-document store record
   hooks/review-prompt.ts       the review, ask, escalation and approval texts
-  types/index.d.ts             the state contract ($.state under 'spec-review')
+  types/index.d.ts             the state contract ($.state under 'doc-review')
   tests/review.test.ts         claude plugin test
+docs/demo.gif, docs/demo.cast  the recording above
+DESIGN.md                      the design and the reasoning behind it
 ```
 
-## Deliberately not built
-
-The design doc's phase 3 named a `Client` module for vim-style keys. The
-Button hotkeys already give `j`, `k`, `g`, `e`, `f`, `m`, `n` on every
-surface, and a `Client` takes keys only after a click gives it focus, on
-terminal and desktop alone. It would add a second input path without adding
-a key the pane does not already answer, so it was left out.
-
-A draggable scrollbar was built as a `Client` and taken out again. A click
-on a `Client` hands it the keyboard, so after touching the bar `j`, `k` and
-Tab stopped reaching the pane until a click elsewhere, and in one terminal
-the drag never registered at all while the pane stopped answering clicks.
-The bar is now a row of Buttons: click-to-jump and `‹ ›` steps, no drag,
-nothing that can trap the keys.
-
-Block markers carry a hover style (undimmed and bold under the pointer), and
-each block's action row is revealed by hover. The test kit describes elements
-without their hover styling, so those are type-checked and validated (the
-engine refuses a reveal it could never show) but the reveal itself is not
-covered by a test. The tests do press the hidden actions and check that each
-block has exactly one row, shown on the current block alone.
-
-Whether a hidden action row joins the Tab ring is the surface's business; in
-case it does, focusing any block action makes that block current, which
-shows its row, so the focus never rests on something hidden.
-
-## Two rules of the engine worth knowing when editing this
+Two engine rules matter when you edit the mod:
 
 - `$` is followed only into functions declared in the same file. A helper in
-  another module cannot take `$`, which is why `persist.ts` holds shapes and
-  the store calls sit in `register.tsx`.
+  another module can't take `$`, which is why `persist.ts` holds only shapes
+  and the store calls live in `register.tsx`.
 - An atom's reference must be written as string literals at the call site.
+
+### Deliberately not built
+
+- **A vim-style `Client` module** (phase 3 of the design). Button hotkeys
+  already cover every key on every surface. A `Client` only receives keys
+  after a click gives it focus, and only on terminal and desktop.
+- **A draggable scrollbar.** It was built as a `Client` and removed. Clicking
+  a `Client` gives it the keyboard, so `j`, `k` and Tab stopped reaching the
+  pane. The bar is now a row of Buttons, which can't trap the keys.
+- **Tests for hover.** The test kit drops hover styling, so the hover reveal
+  is type-checked and validated but not tested. The tests do press the
+  hidden actions and check that each block has exactly one action row.

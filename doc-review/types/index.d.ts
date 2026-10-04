@@ -1,6 +1,6 @@
-// The spec-review mod's state contract: every value it keeps in `$.state`.
+// The doc-review mod's state contract: every value it keeps in `$.state`.
 
-export type SpecReviewBlockKind =
+export type DocReviewBlockKind =
   | 'heading'
   | 'paragraph'
   /** A whole list: what an earlier version made; lists now split into items. */
@@ -12,9 +12,9 @@ export type SpecReviewBlockKind =
   | 'quote'
   | 'rule'
 
-export type SpecReviewBlock = {
+export type DocReviewBlock = {
   index: number
-  kind: SpecReviewBlockKind
+  kind: DocReviewBlockKind
   /** The block's raw markdown. */
   text: string
   /** 1-based line range in the file. */
@@ -27,7 +27,7 @@ export type SpecReviewBlock = {
 }
 
 /** Where a comment belongs, independent of line numbers. */
-export type SpecReviewAnchor = {
+export type DocReviewAnchor = {
   headingPath: string[]
   /** The block's normalised opening text, at most 200 characters. */
   quote: string
@@ -35,17 +35,17 @@ export type SpecReviewAnchor = {
   blockIndex: number
 }
 
-export type SpecReviewComment = {
+export type DocReviewComment = {
   id: string
-  anchor: SpecReviewAnchor
+  anchor: DocReviewAnchor
   text: string
   /** True when the anchor no longer matches any block of the current text. */
   isOrphan: boolean
 }
 
-export type SpecReviewThread = {
+export type DocReviewThread = {
   id: string
-  anchor: SpecReviewAnchor
+  anchor: DocReviewAnchor
   /** `ask` goes to the conversation's model over its transcript; `explain` to a small fresh model. */
   kind: 'ask' | 'explain'
   question: string
@@ -58,12 +58,12 @@ export type SpecReviewThread = {
   cachedTokens?: number
 }
 
-export type SpecReviewDoc = {
+export type DocReviewDoc = {
   path: string
   title: string
   /** The file's text as last read. */
   text: string
-  blocks: SpecReviewBlock[]
+  blocks: DocReviewBlock[]
   /** The focused block's index. */
   cursor: number
   /** How many times the file was re-read since opening. */
@@ -85,21 +85,21 @@ export type SpecReviewDoc = {
 }
 
 /** One document's record in `$.store`, kept across sessions. */
-export type SpecReviewSaved = {
+export type DocReviewSaved = {
   path: string
-  comments: SpecReviewComment[]
-  threads: SpecReviewThread[]
+  comments: DocReviewComment[]
+  threads: DocReviewThread[]
   baselineText: string | null
   lastReviewAt: number | null
   updatedAt: number
 }
 
-export type SpecReviewComposer = {
+export type DocReviewComposer = {
   blockIndex: number
   mode: 'comment' | 'ask' | 'find'
 } | null
 
-export type SpecReviewCandidate = {
+export type DocReviewCandidate = {
   path: string
   writtenAt: number
   /** The session's turn count when it was written. */
@@ -108,12 +108,12 @@ export type SpecReviewCandidate = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'spec-review': {
-      doc: SpecReviewDoc | null
-      comments: SpecReviewComment[]
-      threads: SpecReviewThread[]
-      composer: SpecReviewComposer
-      candidates: SpecReviewCandidate[]
+    'doc-review': {
+      doc: DocReviewDoc | null
+      comments: DocReviewComment[]
+      threads: DocReviewThread[]
+      composer: DocReviewComposer
+      candidates: DocReviewCandidate[]
       offered: string[]
       notice: string | null
     }

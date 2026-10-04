@@ -1,7 +1,7 @@
 // A line diff (Myers) and the unified hunks a Code element draws from it,
 // plus which blocks of a document changed against an earlier version.
 
-import type { SpecReviewBlock } from '../types'
+import type { DocReviewBlock } from '../types'
 import { normalizeQuote } from './blocks'
 
 export type DiffOp = { kind: 'same' | 'add' | 'del'; text: string }
@@ -168,7 +168,7 @@ export function diffText(before: string, after: string, context = 3): { hunks: s
  * version: new or reworded passages. Unchanged blocks moved around are not
  * reported, since they read the same.
  */
-export function changedBlocks(current: readonly SpecReviewBlock[], baselineBlocks: readonly SpecReviewBlock[]): number[] {
+export function changedBlocks(current: readonly DocReviewBlock[], baselineBlocks: readonly DocReviewBlock[]): number[] {
   const seen = new Set(baselineBlocks.map(b => normalizeQuote(b.text) + '\u0000' + b.text.trim()))
   return current.filter(b => !seen.has(normalizeQuote(b.text) + '\u0000' + b.text.trim())).map(b => b.index)
 }

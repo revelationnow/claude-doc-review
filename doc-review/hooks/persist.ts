@@ -5,7 +5,7 @@
 // The store holds 4 MiB of JSON in all, so a record keeps a bounded baseline
 // text, and the records of the least recently touched documents are evicted.
 
-import type { SpecReviewComment, SpecReviewSaved, SpecReviewThread } from '../types'
+import type { DocReviewComment, DocReviewSaved, DocReviewThread } from '../types'
 
 export const STORE_PREFIX = 'doc:'
 export const MAX_SAVED_DOCS = 12
@@ -18,7 +18,7 @@ export function storeKey(cwd: string, path: string): string {
   return `${STORE_PREFIX}${abs}`
 }
 
-export function isSaved(value: unknown): value is SpecReviewSaved {
+export function isSaved(value: unknown): value is DocReviewSaved {
   if (typeof value !== 'object' || value === null) return false
   const v = value as Record<string, unknown>
   return typeof v.path === 'string' && Array.isArray(v.comments) && Array.isArray(v.threads) && typeof v.updatedAt === 'number'
@@ -27,13 +27,13 @@ export function isSaved(value: unknown): value is SpecReviewSaved {
 export function toSaved(
   record: {
     path: string
-    comments: readonly SpecReviewComment[]
-    threads: readonly SpecReviewThread[]
+    comments: readonly DocReviewComment[]
+    threads: readonly DocReviewThread[]
     baselineText: string | null
     lastReviewAt: number | null
   },
   now: number,
-): SpecReviewSaved {
+): DocReviewSaved {
   return {
     path: record.path,
     comments: [...record.comments],

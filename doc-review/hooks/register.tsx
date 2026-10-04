@@ -1,4 +1,4 @@
-// spec-review: review a design spec or implementation plan in a pane.
+// doc-review: review a design spec or implementation plan in a pane.
 //
 // Move block by block, pin comments, ask side questions the main conversation
 // never sees, then submit every comment as one review, or approve. Comments
@@ -21,22 +21,22 @@ import type {
 } from 'claude-code'
 
 import type {
-  SpecReviewBlock,
-  SpecReviewCandidate,
-  SpecReviewComment,
-  SpecReviewComposer,
-  SpecReviewDoc,
-  SpecReviewThread,
+  DocReviewBlock,
+  DocReviewCandidate,
+  DocReviewComment,
+  DocReviewComposer,
+  DocReviewDoc,
+  DocReviewThread,
 } from '../types'
 import { anchorFor, basename, cleanText, codeParts, excerpt, parseBlocks, plainText, reanchor, titleOf, unwrappedLines } from './blocks'
 import { changedBlocks, diffText } from './diff'
 import { STORE_PREFIX, isSaved, keysToEvict, storeKey, toSaved } from './persist'
 import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildExplainPrompt, buildReviewPrompt, buildStandaloneAskPrompt } from './review-prompt'
 
-const PLUGIN = 'spec-review'
-const PANE = 'spec-review'
+const PLUGIN = 'doc-review'
+const PANE = 'doc-review'
 // Not `review`: Claude Code has a built-in /review for pull requests.
-const COMMAND = 'spec-review'
+const COMMAND = 'doc-review'
 
 const DEFAULT_GLOBS =
   'docs/superpowers/specs/**/*.md,docs/superpowers/plans/**/*.md,docs/plans/**/*.md,docs/specs/**/*.md,**/*-design.md,**/*-plan.md,SPEC.md,PLAN.md'
@@ -52,13 +52,13 @@ const NARROW = 70
 const MAX_DRAWN = 200
 const WINDOW_HALF = 60
 
-const docA = atom({ plugin: 'spec-review', key: 'doc' } as const, null)
-const commentsA = atom({ plugin: 'spec-review', key: 'comments' } as const, [])
-const threadsA = atom({ plugin: 'spec-review', key: 'threads' } as const, [])
-const composerA = atom({ plugin: 'spec-review', key: 'composer' } as const, null)
-const candidatesA = atom({ plugin: 'spec-review', key: 'candidates' } as const, [])
-const offeredA = atom({ plugin: 'spec-review', key: 'offered' } as const, [])
-const noticeA = atom({ plugin: 'spec-review', key: 'notice' } as const, null)
+const docA = atom({ plugin: 'doc-review', key: 'doc' } as const, null)
+const commentsA = atom({ plugin: 'doc-review', key: 'comments' } as const, [])
+const threadsA = atom({ plugin: 'doc-review', key: 'threads' } as const, [])
+const composerA = atom({ plugin: 'doc-review', key: 'composer' } as const, null)
+const candidatesA = atom({ plugin: 'doc-review', key: 'candidates' } as const, [])
+const offeredA = atom({ plugin: 'doc-review', key: 'offered' } as const, [])
+const noticeA = atom({ plugin: 'doc-review', key: 'notice' } as const, null)
 
 type Table = {
   Box: ElementConstructor<BoxProps>
@@ -115,12 +115,12 @@ async function readText($: EngineInterface, path: string): Promise<string> {
   return cleanText(typeof raw === 'string' ? raw : '')
 }
 
-function withBaseline(doc: Omit<SpecReviewDoc, 'changed'>, baselineText: string): SpecReviewDoc {
+function withBaseline(doc: Omit<DocReviewDoc, 'changed'>, baselineText: string): DocReviewDoc {
   const changed = baselineText === doc.text ? [] : changedBlocks(doc.blocks, parseBlocks(baselineText))
   return { ...doc, baselineText, changed }
 }
 
-async function reanchorAll($: EngineInterface, blocks: readonly SpecReviewBlock[]): Promise<void> {
+async function reanchorAll($: EngineInterface, blocks: readonly DocReviewBlock[]): Promise<void> {
   await update($, commentsA, list =>
     list.map(c => {
       const at = reanchor(c.anchor, blocks)
@@ -277,7 +277,7 @@ async function refreshDoc($: EngineInterface): Promise<void> {
   await persist($)
 }
 
-function latest(list: readonly SpecReviewCandidate[]): SpecReviewCandidate | undefined {
+function latest(list: readonly DocReviewCandidate[]): DocReviewCandidate | undefined {
   return [...list].sort((a, b) => b.writtenAt - a.writtenAt)[0]
 }
 
@@ -306,14 +306,14 @@ async function nextChange($: EngineInterface): Promise<void> {
   const doc = await read($, docA)
   if (!doc) return
   if (doc.changed.length === 0) {
-    $.ui.toast('spec-review: nothing differs from the version you reviewed.')
+    $.ui.toast('doc-review: nothing differs from the version you reviewed.')
     return
   }
   const after = doc.changed.find(i => i > doc.cursor)
   await setCursor($, after ?? doc.changed[0] ?? doc.cursor)
 }
 
-function findMatches(blocks: readonly SpecReviewBlock[], query: string): number[] {
+function findMatches(blocks: readonly DocReviewBlock[], query: string): number[] {
   const q = query.trim().toLowerCase()
   if (q === '') return []
   return blocks.filter(b => plainText(b.text).toLowerCase().includes(q)).map(b => b.index)
@@ -328,7 +328,7 @@ async function runFind($: EngineInterface, query: string): Promise<void> {
   await update($, composerA, () => null)
   if (query.trim() === '') return
   if (matches.length === 0) {
-    $.ui.toast(`spec-review: no block contains "${query.trim()}".`)
+    $.ui.toast(`doc-review: no block contains "${query.trim()}".`)
     return
   }
   await setCursor($, matches.find(i => i >= doc.cursor) ?? matches[0] ?? doc.cursor)
@@ -342,7 +342,7 @@ async function findNext($: EngineInterface): Promise<void> {
   if (!doc.search || doc.search.matches.length === 0 || composer?.mode === 'find') {
     await update($, docA, d => (d ? { ...d, view: 'document' as const } : d))
     await update($, composerA, () => ({ blockIndex: doc.cursor, mode: 'find' as const }))
-    void $.ui.focus({ requestId: PANE, key: 'find' }).catch(() => undefined)
+    void $.ui.focus({ requestId: PANE, key: 'find-field' }).catch(() => undefined)
     return
   }
   const after = doc.search.matches.find(i => i > doc.cursor)
@@ -362,7 +362,7 @@ async function nextComment($: EngineInterface): Promise<void> {
   const threads = await read($, threadsA)
   const marked = [...new Set([...comments.filter(c => !c.isOrphan).map(c => c.anchor.blockIndex), ...threads.map(t => t.anchor.blockIndex)])].sort((a, b) => a - b)
   if (marked.length === 0) {
-    $.ui.toast('spec-review: no comments or questions yet.')
+    $.ui.toast('doc-review: no comments or questions yet.')
     return
   }
   const after = marked.find(i => i > doc.cursor)
@@ -377,7 +377,7 @@ async function explain($: EngineInterface, model: string, blockIndex?: number): 
   const block = doc.blocks[at]
   if (!block) return
   if (at !== doc.cursor) await update($, docA, d => (d ? { ...d, cursor: at, pan: 0 } : d))
-  const thread: SpecReviewThread = {
+  const thread: DocReviewThread = {
     id: newId('x'),
     anchor: anchorFor(block),
     kind: 'explain',
@@ -391,7 +391,7 @@ async function explain($: EngineInterface, model: string, blockIndex?: number): 
   const { system, prompt } = buildExplainPrompt({ path: doc.path, title: doc.title, block })
   const reply = await $.model.complete({ model, system, prompt, effort: 'low', maxTokens: 400, timeoutMs: 30000 })
   await update($, threadsA, list =>
-    list.map((t): SpecReviewThread => {
+    list.map((t): DocReviewThread => {
       if (t.id !== thread.id) return t
       if (reply.isAnswered) {
         return { ...t, status: 'answered', answer: cleanText(reply.text).trim(), outputTokens: reply.usage.output_tokens, cachedTokens: reply.usage.cache_read_input_tokens }
@@ -447,7 +447,7 @@ async function pan(
 }
 
 /** How far a table or code block can scroll sideways in `room` columns, and by how much a step. */
-function panRange(block: SpecReviewBlock, room: number): { max: number; step: number } {
+function panRange(block: DocReviewBlock, room: number): { max: number; step: number } {
   return { max: Math.max(0, unwrappedWidth(block) - room), step: Math.max(8, room - 8) }
 }
 
@@ -509,8 +509,8 @@ async function composeViaDialog($: EngineInterface, mode: 'comment' | 'ask', blo
   else await addComment($, block, answer.trim())
 }
 
-async function addComment($: EngineInterface, block: SpecReviewBlock, text: string): Promise<void> {
-  const comment: SpecReviewComment = { id: newId('c'), anchor: anchorFor(block), text, isOrphan: false }
+async function addComment($: EngineInterface, block: DocReviewBlock, text: string): Promise<void> {
+  const comment: DocReviewComment = { id: newId('c'), anchor: anchorFor(block), text, isOrphan: false }
   await update($, commentsA, list => [...list, comment])
   await update($, composerA, () => null)
   await persist($)
@@ -526,8 +526,8 @@ async function dismissThread($: EngineInterface, id: string): Promise<void> {
   await persist($)
 }
 
-async function ask($: EngineInterface, doc: SpecReviewDoc, block: SpecReviewBlock, question: string): Promise<void> {
-  const thread: SpecReviewThread = { id: newId('t'), anchor: anchorFor(block), kind: 'ask', question, status: 'pending' }
+async function ask($: EngineInterface, doc: DocReviewDoc, block: DocReviewBlock, question: string): Promise<void> {
+  const thread: DocReviewThread = { id: newId('t'), anchor: anchorFor(block), kind: 'ask', question, status: 'pending' }
   await update($, threadsA, list => [...list, thread])
   await update($, composerA, () => null)
 
@@ -545,7 +545,7 @@ async function ask($: EngineInterface, doc: SpecReviewDoc, block: SpecReviewBloc
   }
 
   await update($, threadsA, list =>
-    list.map((t): SpecReviewThread => {
+    list.map((t): DocReviewThread => {
       if (t.id !== thread.id) return t
       if (reply.isAnswered) {
         return {
@@ -569,7 +569,7 @@ async function submitReview($: EngineInterface): Promise<void> {
   const comments = await read($, commentsA)
   if (!doc) return
   if (comments.length === 0) {
-    $.ui.toast('spec-review: no comments yet. Press c on a block to add one.')
+    $.ui.toast('doc-review: no comments yet. Press c on a block to add one.')
     return
   }
   const text = buildReviewPrompt({ path: doc.path, comments, blocks: doc.blocks })
@@ -591,7 +591,7 @@ async function approve($: EngineInterface, phrase: string): Promise<void> {
   const doc = await read($, docA)
   const comments = await read($, commentsA)
   if (!doc) return
-  let notes: SpecReviewComment[] = []
+  let notes: DocReviewComment[] = []
   if (comments.length > 0) {
     let choice: string
     try {
@@ -619,7 +619,7 @@ async function approve($: EngineInterface, phrase: string): Promise<void> {
   await persist($)
 }
 
-async function escalate($: EngineInterface, thread: SpecReviewThread): Promise<void> {
+async function escalate($: EngineInterface, thread: DocReviewThread): Promise<void> {
   const doc = await read($, docA)
   if (!doc) return
   const at = reanchor(thread.anchor, doc.blocks)
@@ -636,9 +636,9 @@ async function escalate($: EngineInterface, thread: SpecReviewThread): Promise<v
   await persist($)
 }
 
-async function keepAsComment($: EngineInterface, thread: SpecReviewThread): Promise<void> {
+async function keepAsComment($: EngineInterface, thread: DocReviewThread): Promise<void> {
   const answer = thread.answer ? ` (your side answer was: "${thread.answer.slice(0, 300)}")` : ''
-  const comment: SpecReviewComment = {
+  const comment: DocReviewComment = {
     id: newId('c'),
     anchor: thread.anchor,
     text: `${thread.question}${answer}`,
@@ -667,7 +667,7 @@ function widthOf(line: string): number {
 }
 
 /** How wide a table or code block draws unwrapped; 0 for a block that wraps. */
-function unwrappedWidth(block: SpecReviewBlock): number {
+function unwrappedWidth(block: DocReviewBlock): number {
   const lines = unwrappedLines(block)
   return lines ? Math.max(0, ...lines.map(widthOf)) : 0
 }
@@ -680,7 +680,7 @@ function unwrappedWidth(block: SpecReviewBlock): number {
 function drawBody(
   $: EngineInterface,
   t: Table,
-  block: SpecReviewBlock,
+  block: DocReviewBlock,
   args: { room: number; pan: number; dim: boolean; isCurrent: boolean },
 ): RenderElement {
   const { Box, Text, Button, Markdown, Code } = t
@@ -762,7 +762,7 @@ function capHunk(hunk: string): string {
   return hunk.slice(0, cut > 0 ? cut : CODE_CAP)
 }
 
-function drawDiff($: EngineInterface, t: Table, doc: SpecReviewDoc, notice: string | null): RenderElement {
+function drawDiff($: EngineInterface, t: Table, doc: DocReviewDoc, notice: string | null): RenderElement {
   const { Box, Text, Button, Code } = t
   const d = diffText(doc.baselineText, doc.text)
 
@@ -806,10 +806,10 @@ function drawPane(
   args: {
     t: Table
     Input: ElementConstructor<InputProps> | null
-    doc: SpecReviewDoc | null
-    comments: readonly SpecReviewComment[]
-    threads: readonly SpecReviewThread[]
-    composer: SpecReviewComposer
+    doc: DocReviewDoc | null
+    comments: readonly DocReviewComment[]
+    threads: readonly DocReviewThread[]
+    composer: DocReviewComposer
     notice: string | null
     /** Cells across the pane's body. */
     columns: number
@@ -841,7 +841,7 @@ function drawPane(
   const changed = new Set(doc.changed)
   const isNarrow = args.columns < NARROW
   const gutter = isNarrow ? 2 : 3
-  const roomFor = (block: SpecReviewBlock) => Math.max(10, args.columns - gutter - (block.depth ?? 0) * 2)
+  const roomFor = (block: DocReviewBlock) => Math.max(10, args.columns - gutter - (block.depth ?? 0) * 2)
 
   const rows: RenderElement[] = []
   for (let i = lo; i < hi; i += 1) {
@@ -920,7 +920,7 @@ function drawPane(
             <Input
               key="compose"
               autoFocus
-              label={composer.mode === 'ask' ? 'ask:' : 'comment:'}
+              label={composer.mode === 'ask' ? 'ask' : 'comment'}
               placeholder={composer.mode === 'ask' ? 'a question about this passage' : 'what should change here'}
               submitLabel={composer.mode === 'ask' ? 'ask' : 'add'}
               onSubmit={value => {
@@ -998,7 +998,7 @@ function drawPane(
       </Box>
       {composer?.mode === 'find' && Input && (
         <Box flexDirection="row" gap={1} marginBottom={1}>
-          <Input key="find" autoFocus label="find:" placeholder="text to look for in the document" submitLabel="find" value={doc.search?.query ?? ''} onSubmit={value => void runFind($, value)} />
+          <Input key="find-field" autoFocus label="find" placeholder="text to look for in the document" submitLabel="find" value={doc.search?.query ?? ''} onSubmit={value => void runFind($, value)} />
           <Button key="find-cancel" plain dimColor label="cancel" onPress={() => void clearFind($)} />
         </Box>
       )}
