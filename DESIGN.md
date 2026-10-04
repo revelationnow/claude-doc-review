@@ -1,6 +1,6 @@
 # Spec Review Chat: a Claude Code mod for discussing design and plan documents
 
-Status: phases 1 and 2 built in `spec-review/` (see README.md). Phase 3 is design only.
+Status: all three phases built in `spec-review/` (see README.md). Phase 3's `Client` module was dropped; the README says why.
 
 ## 1. The ask
 

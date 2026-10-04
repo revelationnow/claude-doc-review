@@ -41,8 +41,12 @@ export type SpecReviewComment = {
 export type SpecReviewThread = {
   id: string
   anchor: SpecReviewAnchor
+  /** `ask` goes to the conversation's model over its transcript; `explain` to a small fresh model. */
+  kind: 'ask' | 'explain'
   question: string
   status: 'pending' | 'answered' | 'failed'
+  /** The model that answered an `explain` thread. */
+  model?: string
   answer?: string
   failure?: string
   outputTokens?: number
@@ -69,6 +73,8 @@ export type SpecReviewDoc = {
   awaitingRevision: boolean
   /** When a review or approval was last sent for this document. */
   lastReviewAt: number | null
+  /** The last find: its text and the blocks it matches, in order. */
+  search: { query: string; matches: number[] } | null
 }
 
 /** One document's record in `$.store`, kept across sessions. */
@@ -83,7 +89,7 @@ export type SpecReviewSaved = {
 
 export type SpecReviewComposer = {
   blockIndex: number
-  mode: 'comment' | 'ask'
+  mode: 'comment' | 'ask' | 'find'
 } | null
 
 export type SpecReviewCandidate = {

@@ -488,3 +488,133 @@ test('with offer set to toast the pane stays closed and the status line points a
   expect(opened).toHaveLength(0)
   expect(status).toContain('spec ready: /review')
 })
+
+// ---- phase 3 ----------------------------------------------------------------
+
+test('f finds blocks by text, cycles through the matches, and e goes to the end', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+
+  await ui.press({ key: 'find' })
+  expect(await ui.find({ type: 'Input', key: 'find' })).toBeDefined()
+  await ui.input({ key: 'find', text: 'widget' })
+  expect(await ui.find({ type: 'Input', key: 'find' })).toBeUndefined()
+  // The title matches and holds the cursor, so the first match is the current block.
+  expect(await ui.find({ type: 'Text', text: /find "widget" 1\/3/ })).toBeDefined()
+  await ui.press({ key: 'find' })
+  expect(await ui.find({ type: 'Text', text: /block 3\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /find "widget" 2\/3/ })).toBeDefined()
+  await ui.press({ key: 'find' })
+  expect(await ui.find({ type: 'Text', text: /block 6\/12/ })).toBeDefined()
+  await ui.press({ key: 'find' })
+  expect(await ui.find({ type: 'Text', text: /block 1\/12/ })).toBeDefined()
+
+  await ui.press({ key: 'find-clear' })
+  expect(await ui.find({ type: 'Text', text: /find "widget"/ })).toBeUndefined()
+
+  await ui.press({ key: 'end' })
+  expect(await ui.find({ type: 'Text', text: /block 12\/12/ })).toBeDefined()
+
+  // A find with no match leaves the cursor where it was.
+  await ui.press({ key: 'find' })
+  await ui.input({ key: 'find', text: 'kubernetes' })
+  expect(await ui.find({ type: 'Text', text: /block 12\/12/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /no matches/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('m cycles through the blocks that carry comments', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  await ui.press({ key: 'next-comment' }) // nothing yet: a toast, no move
+  expect(await ui.find({ type: 'Text', text: /block 1\/12/ })).toBeDefined()
+
+  await ui.press({ key: 'b:2' })
+  await ui.input({ key: 'compose', text: 'Which devices?' })
+  await ui.press({ key: 'b:5' })
+  await ui.input({ key: 'compose', text: 'Name the file.' })
+  await ui.press({ key: 'top' })
+
+  await ui.press({ key: 'next-comment' })
+  expect(await ui.find({ type: 'Text', text: /block 3\/12/ })).toBeDefined()
+  await ui.press({ key: 'next-comment' })
+  expect(await ui.find({ type: 'Text', text: /block 6\/12/ })).toBeDefined()
+  await ui.press({ key: 'next-comment' })
+  expect(await ui.find({ type: 'Text', text: /block 3\/12/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('h explains the current block on a small fresh model, with no transcript and no escalation', async ($, on) => {
+  const { submitted } = standBeneath(on, { 'docs/plan.md': PLAN })
+  const asked: { model: string; system?: string; prompt: string }[] = []
+  on('model.complete', (_, e) => {
+    asked.push({ model: e.model, system: e.system, prompt: e.prompt })
+    return {
+      value: {
+        isAnswered: true as const,
+        text: 'A write-ahead log records changes before applying them, so a crash loses nothing.',
+        usage: { input_tokens: 90, output_tokens: 22, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    }
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  for (let i = 0; i < 5; i += 1) await ui.press({ key: 'next' })
+  await ui.press({ key: 'explain' })
+
+  expect(asked).toHaveLength(1)
+  expect(asked[0]!.model).toBe('haiku')
+  expect(asked[0]!.system).toContain('Do not evaluate or suggest changes')
+  expect(asked[0]!.prompt).toContain('> Widgets live in a SQLite file per user.')
+  expect(await ui.find({ type: 'Text', text: /ⓘ Explain this passage \(haiku\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Markdown', text: /write-ahead log records changes/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: 'send to conversation' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: 'keep as comment' })).toBeUndefined()
+  expect(submitted).toHaveLength(0)
+
+  const dismiss = await ui.findAll({ type: 'Button', text: 'dismiss' })
+  await ui.press({ key: dismiss[0]!.key! })
+  expect(await ui.find({ type: 'Text', text: /Explain this passage/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the explain model is configurable', { options: { explainModel: 'sonnet' } }, async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  const models: string[] = []
+  on('model.complete', (_, e) => {
+    models.push(e.model)
+    return { value: { isAnswered: false as const, reason: 'empty-reply' as const, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  await ui.press({ key: 'explain' })
+  expect(models).toEqual(['sonnet'])
+  expect(await ui.find({ type: 'Text', text: /could not ask: empty-reply/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('/review forget clears the saved comments for a document', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN, 'docs/other.md': '# Other\n\nUnrelated.\n' })
+  await runReview($, 'docs/plan.md')
+  let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  await ui.press({ key: 'comment' })
+  await ui.input({ key: 'compose', text: 'Name the product.' })
+  expect(await ui.find({ type: 'Text', text: /1 comment/ })).toBeDefined()
+
+  const ran = await runReview($, 'forget')
+  expect(ran.text).toContain('cleared the saved comments and questions for docs/plan.md')
+  expect(await ui.find({ type: 'Text', text: /0 comments/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /were cleared/ })).toBeDefined()
+  await ui.unmount()
+
+  await runReview($, 'docs/other.md')
+  await runReview($, 'docs/plan.md')
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Text', text: /Restored/ })).toBeUndefined()
+  await ui.unmount()
+
+  const none = await runReview($, 'forget docs/nowhere.md')
+  expect(none.text).toContain('cleared the saved comments and questions for docs/nowhere.md')
+})

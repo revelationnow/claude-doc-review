@@ -27,10 +27,10 @@ import type {
   SpecReviewDoc,
   SpecReviewThread,
 } from '../types'
-import { anchorFor, basename, cleanText, excerpt, parseBlocks, reanchor, titleOf } from './blocks'
+import { anchorFor, basename, cleanText, excerpt, parseBlocks, plainText, reanchor, titleOf } from './blocks'
 import { changedBlocks, diffText } from './diff'
 import { STORE_PREFIX, isSaved, keysToEvict, storeKey, toSaved } from './persist'
-import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildReviewPrompt } from './review-prompt'
+import { buildApprovalPrompt, buildAskPrompt, buildEscalationPrompt, buildExplainPrompt, buildReviewPrompt } from './review-prompt'
 
 const PLUGIN = 'spec-review'
 const PANE = 'spec-review'
@@ -182,6 +182,7 @@ async function openDoc($: EngineInterface, path: string, asked: boolean) {
         revision: previous.text === text ? previous.revision : previous.revision + 1,
         view: 'document',
         awaitingRevision: previous.text === text ? previous.awaitingRevision : false,
+        search: null,
       },
       previous.baselineText,
     )
@@ -201,6 +202,7 @@ async function openDoc($: EngineInterface, path: string, asked: boolean) {
         view: 'document',
         awaitingRevision: false,
         lastReviewAt: saved?.lastReviewAt ?? null,
+        search: null,
       },
       saved?.baselineText ?? text,
     )
@@ -252,6 +254,7 @@ async function refreshDoc($: EngineInterface): Promise<void> {
       cursor: Math.min(doc.cursor, Math.max(0, blocks.length - 1)),
       revision: doc.revision + 1,
       awaitingRevision: false,
+      search: doc.search ? { query: doc.search.query, matches: findMatches(blocks, doc.search.query) } : null,
     },
     doc.baselineText,
   )
@@ -300,6 +303,107 @@ async function nextChange($: EngineInterface): Promise<void> {
   }
   const after = doc.changed.find(i => i > doc.cursor)
   await setCursor($, after ?? doc.changed[0] ?? doc.cursor)
+}
+
+function findMatches(blocks: readonly SpecReviewBlock[], query: string): number[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return []
+  return blocks.filter(b => plainText(b.text).toLowerCase().includes(q)).map(b => b.index)
+}
+
+/** Sets the find text and moves to its first match at or after the cursor. */
+async function runFind($: EngineInterface, query: string): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  const matches = findMatches(doc.blocks, query)
+  await update($, docA, d => (d ? { ...d, search: query.trim() === '' ? null : { query: query.trim(), matches } } : d))
+  await update($, composerA, () => null)
+  if (query.trim() === '') return
+  if (matches.length === 0) {
+    $.ui.toast(`spec-review: no block contains "${query.trim()}".`)
+    return
+  }
+  await setCursor($, matches.find(i => i >= doc.cursor) ?? matches[0] ?? doc.cursor)
+}
+
+/** `f`: opens the find field, or with a find set moves to its next match. */
+async function findNext($: EngineInterface): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  const composer = await read($, composerA)
+  if (!doc.search || doc.search.matches.length === 0 || composer?.mode === 'find') {
+    await update($, docA, d => (d ? { ...d, view: 'document' as const } : d))
+    await update($, composerA, () => ({ blockIndex: doc.cursor, mode: 'find' as const }))
+    void $.ui.focus({ requestId: PANE, key: 'find' }).catch(() => undefined)
+    return
+  }
+  const after = doc.search.matches.find(i => i > doc.cursor)
+  await setCursor($, after ?? doc.search.matches[0] ?? doc.cursor)
+}
+
+async function clearFind($: EngineInterface): Promise<void> {
+  await update($, docA, d => (d ? { ...d, search: null } : d))
+  await update($, composerA, c => (c?.mode === 'find' ? null : c))
+}
+
+/** `m`: the next block after the cursor that carries a comment or a question, wrapping. */
+async function nextComment($: EngineInterface): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  const comments = await read($, commentsA)
+  const threads = await read($, threadsA)
+  const marked = [...new Set([...comments.filter(c => !c.isOrphan).map(c => c.anchor.blockIndex), ...threads.map(t => t.anchor.blockIndex)])].sort((a, b) => a - b)
+  if (marked.length === 0) {
+    $.ui.toast('spec-review: no comments or questions yet.')
+    return
+  }
+  const after = marked.find(i => i > doc.cursor)
+  await setCursor($, after ?? marked[0] ?? doc.cursor)
+}
+
+/** `h`: a plain-words explanation of the current block from a small, fresh model. */
+async function explain($: EngineInterface, model: string): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  const block = doc.blocks[doc.cursor]
+  if (!block) return
+  const thread: SpecReviewThread = {
+    id: newId('x'),
+    anchor: anchorFor(block),
+    kind: 'explain',
+    question: 'Explain this passage',
+    status: 'pending',
+    model,
+  }
+  await update($, threadsA, list => [...list, thread])
+  await update($, composerA, () => null)
+
+  const { system, prompt } = buildExplainPrompt({ path: doc.path, title: doc.title, block })
+  const reply = await $.model.complete({ model, system, prompt, effort: 'low', maxTokens: 400, timeoutMs: 30000 })
+  await update($, threadsA, list =>
+    list.map((t): SpecReviewThread => {
+      if (t.id !== thread.id) return t
+      if (reply.isAnswered) {
+        return { ...t, status: 'answered', answer: cleanText(reply.text).trim(), outputTokens: reply.usage.output_tokens, cachedTokens: reply.usage.cache_read_input_tokens }
+      }
+      const why = reply.reason === 'api-error' ? `API error${reply.status ? ` ${reply.status}` : ''} (${reply.error})` : reply.reason
+      return { ...t, status: 'failed', failure: why }
+    }),
+  )
+  await persist($)
+}
+
+/** Drops the document's saved comments and questions, in the pane and the store. */
+async function forgetDoc($: EngineInterface, path: string): Promise<void> {
+  const cwd = await $.session.cwd()
+  await $.store.delete(storeKey(cwd, path))
+  const doc = await read($, docA)
+  if (doc && samePath(cwd, doc.path, path)) {
+    await update($, commentsA, () => [])
+    await update($, threadsA, () => [])
+    await update($, docA, d => (d ? { ...withBaseline(d, d.text), awaitingRevision: false, lastReviewAt: null } : d))
+    await update($, noticeA, () => 'Saved comments and questions for this document were cleared.')
+  }
 }
 
 async function toggleView($: EngineInterface): Promise<void> {
@@ -376,7 +480,7 @@ async function dismissThread($: EngineInterface, id: string): Promise<void> {
 }
 
 async function ask($: EngineInterface, doc: SpecReviewDoc, block: SpecReviewBlock, question: string): Promise<void> {
-  const thread: SpecReviewThread = { id: newId('t'), anchor: anchorFor(block), question, status: 'pending' }
+  const thread: SpecReviewThread = { id: newId('t'), anchor: anchorFor(block), kind: 'ask', question, status: 'pending' }
   await update($, threadsA, list => [...list, thread])
   await update($, composerA, () => null)
 
@@ -550,6 +654,7 @@ function drawPane(
     notice: string | null
     bodyRows: number
     approvePhrase: string
+    explainModel: string
   },
 ): RenderElement {
   const { t, Input, doc, comments, threads, composer, notice } = args
@@ -596,6 +701,7 @@ function drawPane(
               plain
               dimColor={!isCurrent && !isChanged}
               label={isCurrent ? '▶' : isChanged ? '+' : '·'}
+              hover={{ dimColor: false, bold: true }}
               onPress={() => void compose('comment', i)}
             />
           </Box>
@@ -617,15 +723,16 @@ function drawPane(
         {ownThreads.map(th => (
           <Box key={`th:${th.id}`} flexDirection="column" marginLeft={3}>
             <Text color="cyan" wrap="wrap">
-              ? {th.question}
+              {th.kind === 'explain' ? 'ⓘ' : '?'} {th.question}
+              {th.kind === 'explain' && th.model ? ` (${th.model})` : ''}
             </Text>
-            {th.status === 'pending' && <Text dimColor>asking…</Text>}
+            {th.status === 'pending' && <Text dimColor>{th.kind === 'explain' ? 'explaining…' : 'asking…'}</Text>}
             {th.status === 'failed' && <Text color="red">could not ask: {th.failure ?? 'unknown'}</Text>}
             {th.status === 'answered' && <Markdown text={capMarkdown(th.answer ?? '')} dimColor />}
             {th.status !== 'pending' && (
               <Box flexDirection="row" gap={1}>
-                <Button key={`keep:${th.id}`} plain label="keep as comment" onPress={() => void keepAsComment($, th)} />
-                <Button key={`send:${th.id}`} plain label="send to conversation" onPress={() => void escalate($, th)} />
+                {th.kind === 'ask' && <Button key={`keep:${th.id}`} plain label="keep as comment" onPress={() => void keepAsComment($, th)} />}
+                {th.kind === 'ask' && <Button key={`send:${th.id}`} plain label="send to conversation" onPress={() => void escalate($, th)} />}
                 <Button key={`drop:${th.id}`} plain dimColor label="dismiss" onPress={() => void dismissThread($, th.id)} />
                 {th.status === 'answered' && th.outputTokens !== undefined && (
                   <Text dimColor>
@@ -636,7 +743,7 @@ function drawPane(
             )}
           </Box>
         ))}
-        {composer && composer.blockIndex === i && Input && (
+        {composer && composer.mode !== 'find' && composer.blockIndex === i && Input && (
           <Box flexDirection="row" marginLeft={3} gap={1}>
             <Input
               key="compose"
@@ -671,14 +778,21 @@ function drawPane(
         {doc.revision > 0 ? ` · revision ${doc.revision}` : ''}
         {doc.changed.length > 0 ? ` · ${doc.changed.length} changed since reviewed` : ''}
         {doc.awaitingRevision ? ' · awaiting revision' : ''}
+        {doc.search
+          ? ` · find "${doc.search.query}" ${doc.search.matches.length === 0 ? 'no matches' : `${Math.max(1, doc.search.matches.indexOf(doc.cursor) + 1)}/${doc.search.matches.length}`}`
+          : ''}
       </Text>
       {notice && <Text color="green">{notice}</Text>}
       <Box flexDirection="row" gap={2} marginBottom={1}>
         <Button key="next" plain hotkey="j" label="next" onPress={() => void moveCursor($, 1)} />
         <Button key="prev" plain hotkey="k" label="prev" onPress={() => void moveCursor($, -1)} />
         <Button key="top" plain hotkey="g" label="top" onPress={() => void moveCursor($, () => 0)} />
+        <Button key="end" plain hotkey="e" label="end" onPress={() => void moveCursor($, (_, n) => n - 1)} />
+        <Button key="find" plain hotkey="f" label={doc.search ? 'find next' : 'find'} onPress={() => void findNext($)} />
+        <Button key="next-comment" plain hotkey="m" label="next comment" onPress={() => void nextComment($)} />
         <Button key="comment" plain hotkey="c" label="comment" onPress={() => void compose('comment')} />
         <Button key="ask" plain hotkey="a" label="ask" onPress={() => void compose('ask')} />
+        <Button key="explain" plain hotkey="h" label="explain" onPress={() => void explain($, args.explainModel)} />
         <Button key="submit" plain hotkey="s" label={`submit review${live.length > 0 ? ` (${live.length})` : ''}`} onPress={() => void submitReview($)} />
         <Button key="approve" plain hotkey="o" label="approve" onPress={() => void approve($, args.approvePhrase)} />
         {doc.changed.length > 0 && <Button key="next-change" plain hotkey="n" label="next change" onPress={() => void nextChange($)} />}
@@ -686,6 +800,21 @@ function drawPane(
         {doc.changed.length > 0 && <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />}
         <Button key="close" plain hotkey="x" label="close" onPress={() => void $.ui.close({ id: PANE })} />
       </Box>
+      {composer?.mode === 'find' && Input && (
+        <Box flexDirection="row" gap={1} marginBottom={1}>
+          <Input key="find" autoFocus label="find:" placeholder="text to look for in the document" submitLabel="find" value={doc.search?.query ?? ''} onSubmit={value => void runFind($, value)} />
+          <Button key="find-cancel" plain dimColor label="cancel" onPress={() => void clearFind($)} />
+        </Box>
+      )}
+      {composer?.mode === 'find' && !Input && <Text dimColor>This surface has no text field for find.</Text>}
+      {doc.search && composer?.mode !== 'find' && (
+        <Box flexDirection="row" gap={1} marginBottom={1}>
+          <Text dimColor>
+            find "{doc.search.query}": {doc.search.matches.length} {doc.search.matches.length === 1 ? 'block' : 'blocks'}
+          </Text>
+          <Button key="find-clear" plain dimColor label="clear" onPress={() => void clearFind($)} />
+        </Box>
+      )}
       {lo > 0 && <Text dimColor>… {lo} more above (k to move up)</Text>}
       {rows}
       {hi < n && <Text dimColor>… {n - hi} more below (j to move down)</Text>}
@@ -716,6 +845,7 @@ export const register: Register = (on, options) => {
     .map(globToRegExp)
   const offer = String(options.offer ?? 'auto')
   const approvePhrase = String(options.approvePhrase ?? 'Looks good, proceed.')
+  const explainModel = String(options.explainModel ?? 'haiku')
 
   const matches = (cwd: string, path: string): boolean => {
     const rel = relativeTo(cwd, path)
@@ -726,13 +856,22 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: 'Review a spec or plan: move by block, comment, ask, submit one review',
-      argumentHint: '[path]',
+      argumentHint: '[path] | forget [path]',
     })
     return next(e)
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
     let path = e.args.trim()
+
+    const forget = /^forget(?:\s+(.*))?$/.exec(path)
+    if (forget) {
+      const target = (forget[1] ?? '').trim() || (await read($, docA))?.path || ''
+      if (target === '') return { text: `${PLUGIN}: nothing to forget. Usage: /${COMMAND} forget [path]` }
+      await forgetDoc($, target)
+      return { text: `${PLUGIN}: cleared the saved comments and questions for ${target}.` }
+    }
+
     if (path === '') {
       const doc = await read($, docA)
       path = doc?.path ?? latest(await read($, candidatesA))?.path ?? ''
@@ -746,7 +885,7 @@ export const register: Register = (on, options) => {
     const opened = await openDoc($, path, true)
     if (!opened.isPlaced) return { text: `${PLUGIN}: the pane is not placed: ${opened.reason}` }
     return {
-      text: `Reviewing ${path}. In the pane: j/k move, c comment, a ask, s submit review, o approve, d diff, x close. Tab also walks the blocks.`,
+      text: `Reviewing ${path}. In the pane: j/k move, f find, c comment, a ask, h explain, s submit review, o approve, d diff, x close. Tab also walks the blocks.`,
     }
   })
 
@@ -826,7 +965,7 @@ export const register: Register = (on, options) => {
       read($, noticeA),
     ])
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
-    const common = { doc, comments, threads, composer, notice, bodyRows, approvePhrase }
+    const common = { doc, comments, threads, composer, notice, bodyRows, approvePhrase, explainModel }
 
     if (e.surface === 'mobile') {
       const t = $.ui.resolve(e)

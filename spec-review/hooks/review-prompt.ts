@@ -75,3 +75,19 @@ export function buildApprovalPrompt(args: {
   })
   return lines.join('\n').trimEnd()
 }
+
+/** A fresh small model's brief: the passage and the document's title, nothing more. */
+export function buildExplainPrompt(args: { path: string; title: string; block: SpecReviewBlock }): { system: string; prompt: string } {
+  return {
+    system:
+      'You explain passages of software design documents to their reviewer. Answer in plain words, in at most four short sentences. Define any jargon or acronym the passage uses. Do not evaluate or suggest changes; only explain what it says and means.',
+    prompt: [
+      `Document: "${args.title}" (${args.path}).`,
+      `Passage, ${describeBlock(args.block)}:`,
+      '',
+      ...args.block.text.split('\n').map(l => `> ${l}`),
+      '',
+      'Explain this passage.',
+    ].join('\n'),
+  }
+}

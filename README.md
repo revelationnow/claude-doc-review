@@ -46,6 +46,15 @@ README covers what the mod does today and how to run it.
 - **Works without a text field.** On a surface with no `Input` (the mobile
   app), comment and ask go through the engine's own question dialog, whose
   free-text answer becomes the comment.
+- **Find, and cycle.** `f` opens a find field; matches are counted in the
+  header and `f` again moves to the next one. `m` cycles through the blocks
+  that carry comments or questions, `e` jumps to the end.
+- **Explain on a small model.** `h` asks a fresh small model (`haiku` by
+  default) to explain the current passage in plain words. It sees only the
+  passage and the document's title, never the conversation, so it costs a few
+  hundred tokens and leaves no trace in the transcript.
+- **Forget.** `/review forget [path]` clears a document's saved comments and
+  questions, in the pane and in the store.
 
 ## Keys in the pane
 
@@ -55,11 +64,14 @@ The pane must hold the keyboard for hotkeys to work: it opens focused from
 | Key | Action |
 | --- | --- |
 | `j` / `k` | Next / previous block |
-| `g` | Top of the document |
+| `g` / `e` | Top / end of the document |
+| `f` | Find text; again for the next match |
+| `m` | Next block with a comment or question |
 | `Tab` / `Shift+Tab` | Walk the blocks (the focus ring) |
 | `Enter` on a block marker | Comment on that block |
 | `c` | Comment on the current block |
 | `a` | Ask a side question about the current block |
+| `h` | Explain the current block on a small fresh model |
 | `s` | Submit all comments as one review |
 | `o` | Approve (asks what to do with unsent comments) |
 | `n` | Next block changed since the version you reviewed |
@@ -103,6 +115,7 @@ settings.
 | `globs` | superpowers specs and plans, `docs/plans`, `*-design.md`, `*-plan.md`, `SPEC.md`, `PLAN.md` | Comma-separated globs of documents that count |
 | `offer` | `auto` | `auto` opens the pane when a review is asked for; `toast` only shows a toast and status line; `off` leaves it to `/review` |
 | `approvePhrase` | `Looks good, proceed.` | What `o` sends as your words |
+| `explainModel` | `haiku` | The model alias or id behind `h` |
 
 Note on `auto`: a pane opened without a user action is only placed on
 terminals 144 columns or wider (110 once you have opened it yourself). On a
@@ -122,7 +135,7 @@ narrower terminal the mod falls back to a toast and a status line pointing at
 
 ```
 claude plugin validate spec-review   # what the engine will load and refuse
-claude plugin test spec-review       # 19 tests, no terminal needed
+claude plugin test spec-review       # 24 tests, no terminal needed
 ```
 
 Type-checking: once the mod has loaded in a session, the engine lays this
@@ -144,11 +157,17 @@ spec-review/
   tests/review.test.ts         claude plugin test
 ```
 
-## Not yet (phase 3)
+## Deliberately not built
 
-Vim-style navigation through a `Client` module on terminal and desktop, `/`
-search, hover styling, and a cheap "explain this term" path on a small model.
-See DESIGN.md section 8.
+The design doc's phase 3 named a `Client` module for vim-style keys. The
+Button hotkeys already give `j`, `k`, `g`, `e`, `f`, `m`, `n` on every
+surface, and a `Client` takes keys only after a click gives it focus, on
+terminal and desktop alone. It would add a second input path without adding
+a key the pane does not already answer, so it was left out.
+
+Block markers carry a hover style (undimmed and bold under the pointer). The
+test kit describes elements without their hover styling, so that is
+type-checked and validated but not covered by a test.
 
 ## Two rules of the engine worth knowing when editing this
 

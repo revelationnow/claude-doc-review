@@ -17,6 +17,12 @@
       "default": "auto",
       "options": ["auto", "toast", "off"]
     },
+    "explainModel": {
+      "type": "string",
+      "title": "Explain model",
+      "description": "The model alias or id that answers 'explain this passage' (h). A small fast model keeps it cheap.",
+      "default": "haiku"
+    },
     "approvePhrase": {
       "type": "string",
       "title": "Approval phrase",
