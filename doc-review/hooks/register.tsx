@@ -1025,6 +1025,35 @@ function drawPane(
   const gutter = isNarrow ? 2 : 3
   const roomFor = (block: DocReviewBlock) => Math.max(10, args.columns - gutter - (block.depth ?? 0) * 2)
 
+  /**
+   * A block's actions: always shown on the current block, shown on any other
+   * while the pointer is on it. They sit in the blank row under the block, so
+   * nothing moves. An item of a tight list has no blank row under it (the
+   * next item starts there and would paint over them), so its actions sit at
+   * the right end of its own last line instead, drawn over it.
+   */
+  const actionRow = (i: number, isCurrent: boolean, isTight: boolean) => {
+    const at = doc.blocks[i]
+    const place = isTight ? { bottom: 0, right: 0 } : { bottom: -1, left: gutter + (at?.depth ?? 0) * 2 }
+    return (
+      // Unkeyed: a key would make it a hover scope of its own, and a hidden
+      // Box is never under the pointer.
+      <Box
+        position="absolute"
+        {...place}
+        flexDirection="row"
+        {...(isCurrent ? {} : { display: 'none' as const, hover: { display: 'flex' as const } })}
+      >
+        {isTight && <Text>{'  '}</Text>}
+        <Button key={`act-c:${i}`} plain dimColor label="comment" onPress={() => void compose('comment', i)} />
+        <Text dimColor> · </Text>
+        <Button key={`act-a:${i}`} plain dimColor label="ask" onPress={() => void compose('ask', i)} />
+        <Text dimColor> · </Text>
+        <Button key={`act-h:${i}`} plain dimColor label="explain" onPress={() => void explain($, args.explainModel, i)} />
+      </Box>
+    )
+  }
+
   const rows: RenderElement[] = []
   for (let i = lo; i < hi; i += 1) {
     const block = doc.blocks[i]
@@ -1134,21 +1163,7 @@ function drawPane(
             <Button key="cancel" plain dimColor label="cancel" onPress={() => void update($, composerA, () => null)} />
           </Box>
         )}
-        {/* The block's actions, in the blank row under it so nothing moves: always
-            under the current block, under any other while the pointer is on it. */}
-        <Box
-          position="absolute"
-          bottom={-1}
-          left={under}
-          flexDirection="row"
-          {...(isCurrent ? {} : { display: 'none' as const, hover: { display: 'flex' as const } })}
-        >
-          <Button key={`act-c:${i}`} plain dimColor label="comment" onPress={() => void compose('comment', i)} />
-          <Text dimColor> · </Text>
-          <Button key={`act-a:${i}`} plain dimColor label="ask" onPress={() => void compose('ask', i)} />
-          <Text dimColor> · </Text>
-          <Button key={`act-h:${i}`} plain dimColor label="explain" onPress={() => void explain($, args.explainModel, i)} />
-        </Box>
+        {actionRow(i, isCurrent, isTight)}
       </Box>,
     )
   }

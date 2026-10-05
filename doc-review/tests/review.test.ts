@@ -782,8 +782,13 @@ test('every block carries comment, ask and explain actions, shown on the current
 
   // One row of actions per block, in the gap under it: shown on the current
   // block, revealed by hover on the others.
-  const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.position === 'absolute' && !String(b.key ?? '').startsWith('pre:'))
+  const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.position === 'absolute' && b.props.flexDirection === 'row')
   expect(rows.length).toBe(13)
+  // The first item of the tight list has no gap under it: its row sits at
+  // the right end of its own last line, not under it where the next item is.
+  const tight = rows.find(r => r.props.right === 0)
+  expect(tight?.props.bottom).toBe(0)
+  expect(rows.filter(r => r.props.right === 0).length).toBe(1)
   expect(rows.filter(r => r.props.display === undefined).length).toBe(1)
   // The kit describes elements without their hover styling: the reveal itself is validated, not asserted.
   expect(rows.filter(r => r.props.display === 'none').length).toBe(12)

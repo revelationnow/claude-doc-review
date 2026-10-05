@@ -119,7 +119,8 @@ desktop app and VS Code.
 - **Click a block's marker** (`·`) to select it. Click the current marker
   (`▶`) to comment.
 - **Hover a block** to show `comment · ask · explain` in the gap under it.
-  Showing the row doesn't shift the layout.
+  A bullet in a tight list has no gap, so its actions show at the right end
+  of its last line instead. Showing them doesn't shift the layout.
 - **Every key has a button**, including the toolbar, the answer actions, the
   ✕ on a comment, and the approve dialog.
 - **The wheel scrolls the pane.** Documents with more than 200 blocks are
