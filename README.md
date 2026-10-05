@@ -175,6 +175,11 @@ claude plugin test doc-review       # 45 tests, no terminal needed
 npx -p typescript@5 tsc -p doc-review
 ```
 
+The engine's checks differ between Claude Code builds, so run `validate` and
+`test` with each build you support (`~/.local/share/claude/versions/<build>
+plugin test doc-review`) before publishing a version. A module one build
+refuses doesn't load at all there, and `/doc-review` disappears.
+
 Type-checking needs the API declarations that the engine writes under
 `doc-review/.claude-plugin/types/` the first time the mod loads in a session.
 The tests mount every view on the terminal, desktop and VS Code surfaces.

@@ -315,11 +315,13 @@ function newId(prefix: string): string {
  * is, as the find field needs while the person types.
  */
 async function setCursor($: EngineInterface, cursor: number, opts: { pan?: number; focus?: boolean } = {}): Promise<void> {
-  const pan = opts.pan ?? 0
+  // Not `pan`: the engine follows $ by function name, and a second
+  // declaration of a name it follows refuses the whole module.
+  const sideways = opts.pan ?? 0
   let from = cursor
   await update($, docA, d => {
     if (d) from = d.cursor
-    return d && (d.cursor !== cursor || (d.pan ?? 0) !== pan) ? { ...d, cursor, view: 'document' as const, pan } : d
+    return d && (d.cursor !== cursor || (d.pan ?? 0) !== sideways) ? { ...d, cursor, view: 'document' as const, pan: sideways } : d
   })
   // Going up, the block lands on the window's first row, where the sticky bar
   // covers it: reveal the mark drawn the bar's height above it instead.
