@@ -188,6 +188,7 @@ doc-review/
 .claude-plugin/marketplace.json  makes the repo a plugin marketplace
 docs/demo.gif, docs/demo.cast    the recording above
 DESIGN.md                        the design and the reasoning behind it
+LICENSE                          Apache License 2.0
 ```
 
 Two engine rules matter when you edit the mod:
@@ -208,3 +209,7 @@ Two engine rules matter when you edit the mod:
 - **Tests for hover.** The test kit drops hover styling, so the hover reveal
   is type-checked and validated but not tested. The tests do press the
   hidden actions and check that each block has exactly one action row.
+
+## License
+
+[Apache License 2.0](LICENSE).

@@ -1,6 +1,6 @@
 {
   "name": "doc-review",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Review design specs and implementation plans in a pane: move by block, pin comments, ask side questions, submit one review.",
   "author": {
     "name": "revelationnow",
@@ -8,6 +8,7 @@
   },
   "homepage": "https://github.com/revelationnow/claude-doc-review",
   "repository": "https://github.com/revelationnow/claude-doc-review",
+  "license": "Apache-2.0",
   "types": "./types/index.d.ts",
   "userConfig": {
     "globs": {
