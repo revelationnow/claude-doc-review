@@ -2,6 +2,12 @@
   "name": "doc-review",
   "version": "0.1.0",
   "description": "Review design specs and implementation plans in a pane: move by block, pin comments, ask side questions, submit one review.",
+  "author": {
+    "name": "revelationnow",
+    "url": "https://github.com/revelationnow"
+  },
+  "homepage": "https://github.com/revelationnow/claude-doc-review",
+  "repository": "https://github.com/revelationnow/claude-doc-review",
   "types": "./types/index.d.ts",
   "userConfig": {
     "globs": {
@@ -15,7 +21,11 @@
       "title": "When a spec is ready",
       "description": "auto: open the review pane when the model asks for a review; toast: only show a toast and status line; off: never offer, /doc-review only.",
       "default": "auto",
-      "options": ["auto", "toast", "off"]
+      "options": [
+        "auto",
+        "toast",
+        "off"
+      ]
     },
     "explainModel": {
       "type": "string",

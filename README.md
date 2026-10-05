@@ -30,14 +30,36 @@ one review.
   item, table and code fence is its own stop, and comments follow their
   passage when Claude edits the file.
 
-## Quick start
+## Install
+
+One line, from any shell:
 
 ```sh
-git clone https://github.com/revelationnow/claude-doc-review
-claude --plugin-dir ./claude-doc-review/doc-review
+claude plugin marketplace add revelationnow/claude-doc-review && claude plugin install doc-review@claude-doc-review
 ```
 
-Then, inside Claude Code:
+Or from inside Claude Code:
+
+```
+/plugin marketplace add revelationnow/claude-doc-review
+/plugin install doc-review@claude-doc-review
+```
+
+Then start a new session, or run `/reload-plugins` in an open one. This works
+the same in the terminal, the desktop app and VS Code. The settings below all
+have defaults, so the "userConfig options not yet set" note after installing
+can be ignored.
+
+To update or remove it later:
+
+```sh
+claude plugin marketplace update claude-doc-review && claude plugin update doc-review@claude-doc-review
+claude plugin uninstall doc-review@claude-doc-review
+```
+
+## Quick start
+
+Open any markdown file for review:
 
 ```
 /doc-review docs/superpowers/specs/2026-10-04-widgets-design.md
@@ -46,9 +68,6 @@ Then, inside Claude Code:
 You can also skip the command. When a plugin such as
 [superpowers](https://github.com/obra/superpowers) writes a spec or plan and
 asks for a review, the pane opens by itself.
-
-To load it in every session, add the absolute path of `doc-review/` to
-`CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`.
 
 ## What it does
 
@@ -132,14 +151,16 @@ any width.
 | VS Code | Same as the desktop app |
 | Mobile | Comment and ask through the question dialog |
 
-The desktop app and VS Code start sessions themselves, so `--plugin-dir`
-isn't available there. Load the mod in one of two ways:
+The marketplace install above covers every surface. To run a local checkout
+instead, for example while hacking on it, use one of:
 
-- Put its path in `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. Add
-  `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"` if you want edits to hot-reload.
-- Add this repo as a folder marketplace (`claude plugin marketplace add
-  <folder>`), install the plugin from it, and run `/reload-plugins` after
-  each edit.
+- `claude --plugin-dir ./doc-review` for a single terminal session.
+- `CLAUDE_CODE_PLUGIN_DIRS` set to the folder's absolute path in the `env`
+  block of `~/.claude/settings.json`, for every session including desktop and
+  VS Code. Add `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"` to hot-reload edits.
+- `claude plugin marketplace add ./` from the checkout, then install as
+  above. A folder marketplace is read in place, so `/reload-plugins` picks up
+  edits.
 
 ## Developing
 
@@ -164,8 +185,9 @@ doc-review/
   hooks/review-prompt.ts       the review, ask, escalation and approval texts
   types/index.d.ts             the state contract ($.state under 'doc-review')
   tests/review.test.ts         claude plugin test
-docs/demo.gif, docs/demo.cast  the recording above
-DESIGN.md                      the design and the reasoning behind it
+.claude-plugin/marketplace.json  makes the repo a plugin marketplace
+docs/demo.gif, docs/demo.cast    the recording above
+DESIGN.md                        the design and the reasoning behind it
 ```
 
 Two engine rules matter when you edit the mod:

@@ -1,0 +1,19 @@
+{
+  "name": "claude-doc-review",
+  "owner": {
+    "name": "revelationnow",
+    "url": "https://github.com/revelationnow"
+  },
+  "metadata": {
+    "description": "Review Claude's design docs and plans like a pull request."
+  },
+  "plugins": [
+    {
+      "name": "doc-review",
+      "source": "./doc-review",
+      "description": "Review design specs and implementation plans in a pane: move by block, pin comments, ask side questions, submit one review.",
+      "homepage": "https://github.com/revelationnow/claude-doc-review",
+      "category": "productivity"
+    }
+  ]
+}
