@@ -85,7 +85,9 @@ asks for a review, the pane opens by itself.
 | **Submit or approve** | `s` sends every comment as one review. `o` sends your approval phrase and can fold unsent comments in as non-blocking notes. |
 | **Live refresh and diff** | When Claude edits the open file, the pane re-reads it and re-anchors comments. Changed blocks get a `+` in the margin, `n` jumps between them, and `d` shows the diff against the version you reviewed. |
 | **Persistence** | Comments, answered questions and the last-reviewed text are saved per document across sessions, for the twelve most recently touched documents. `/doc-review forget [path]` clears one. |
-| **Find and cycle** | `f` finds text. `m` cycles through blocks that have comments. `g` and `e` jump to the top and end. |
+| **Find** | `f` opens the find field. As you type, every match in the document is highlighted and the field previews the match Enter will jump to. Enter jumps there, panning a wide table or code block to bring the match into view. Then `f` and `b` step forward and back through the matches. |
+| **Sticky bar** | Once you scroll down, a bar with your position and the main actions stays pinned to the top of the pane. |
+| **Cycle and jump** | `m` cycles through blocks that have comments. `g` and `e` jump to the top and end. |
 
 ## Keys
 
@@ -97,6 +99,7 @@ Hotkeys work while the pane has the keyboard. It opens focused from
 | `j` / `k` | Next / previous block |
 | `g` / `e` | Top / end |
 | `f` | Find; press again for the next match |
+| `b` | Previous match |
 | `m` | Next block with a comment or question |
 | `Tab` / `Shift+Tab` | Walk the blocks and their actions |
 | `c`, or `Enter` on the current marker | Comment |
@@ -168,7 +171,7 @@ instead, for example while hacking on it, use one of:
 
 ```sh
 claude plugin validate doc-review   # what the engine will load and refuse
-claude plugin test doc-review       # 41 tests, no terminal needed
+claude plugin test doc-review       # 45 tests, no terminal needed
 npx -p typescript@5 tsc -p doc-review
 ```
 

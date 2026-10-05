@@ -97,8 +97,11 @@ export type DocReviewSaved = {
 }
 
 export type DocReviewComposer = {
+  /** The block it was opened on; for find, where the cursor goes back to on cancel. */
   blockIndex: number
   mode: 'comment' | 'ask' | 'find'
+  /** The find field's text when it opened: drawn once, so typing is never overwritten. */
+  initial?: string
 } | null
 
 export type DocReviewCandidate = {

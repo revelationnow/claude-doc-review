@@ -782,7 +782,7 @@ test('every block carries comment, ask and explain actions, shown on the current
 
   // One row of actions per block, in the gap under it: shown on the current
   // block, revealed by hover on the others.
-  const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.position === 'absolute')
+  const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.position === 'absolute' && !String(b.key ?? '').startsWith('pre:'))
   expect(rows.length).toBe(13)
   expect(rows.filter(r => r.props.display === undefined).length).toBe(1)
   // The kit describes elements without their hover styling: the reveal itself is validated, not asserted.
@@ -999,5 +999,86 @@ test('askModel sets the default for side questions', { options: { askModel: 'hai
   await ui.input({ key: 'compose', text: 'Is this fine?' })
   expect(forks).toBe(0)
   expect(models).toEqual(['haiku'])
+  await ui.unmount()
+})
+
+test('find is incremental: each keystroke marks the matches and previews the next; Enter jumps, cancel stays', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  await ui.press({ key: 'next' })
+  await ui.press({ key: 'find' })
+  await ui.input({ key: 'find-field', text: 'sq', kind: 'change' })
+  // The field stays open and the cursor stays put: moving would scroll the field away.
+  expect(await ui.find({ type: 'Input', key: 'find-field' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /block 2\/13/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /1\/1 · block 6 · / })).toBeDefined()
+  expect((await ui.findAll({ type: 'Text', text: 'SQ' })).some(h => h.props.inverse === true)).toBe(true)
+  await ui.input({ key: 'find-field', text: 'sqz', kind: 'change' })
+  expect(await ui.find({ type: 'Text', text: /find "sqz": no matches/ })).toBeDefined()
+  await ui.press({ key: 'find-cancel' })
+  expect(await ui.find({ type: 'Input', key: 'find-field' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /block 2\/13/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /find "/ })).toBeUndefined()
+
+  // Enter keeps the find and jumps to the previewed match.
+  await ui.press({ key: 'find' })
+  await ui.input({ key: 'find-field', text: 'clock', kind: 'change' })
+  await ui.input({ key: 'find-field', text: 'clock' })
+  expect(await ui.find({ type: 'Input', key: 'find-field' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /block 13\/13/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('b goes back through the matches, wrapping', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Button', key: 'find-prev' })).toBeUndefined()
+  await ui.press({ key: 'find' })
+  await ui.input({ key: 'find-field', text: 'widget' })
+  expect((await ui.find({ type: 'Button', key: 'find-prev' }))?.props.hotkey).toBe('b')
+  await ui.press({ key: 'find-prev' })
+  expect(await ui.find({ type: 'Text', text: /find "widget" 3\/3/ })).toBeDefined()
+  await ui.press({ key: 'find-prev' })
+  expect(await ui.find({ type: 'Text', text: /find "widget" 2\/3/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('matches are highlighted, and a wide table pans to show its match', async ($, on) => {
+  const wide = `# Wide\n\n| Name | Description |\n| --- | --- |\n| sync | ${'a long cell '.repeat(8).trim()} needle here |\n\nAfter.\n`
+  standBeneath(on, { 'docs/plan.md': PLAN, 'docs/wide.md': wide })
+  await runReview($, 'docs/plan.md')
+  let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  await ui.press({ key: 'find' })
+  await ui.input({ key: 'find-field', text: 'sqlite' })
+  const hits = await ui.findAll({ type: 'Text', text: 'SQLite' })
+  expect(hits.some(h => h.props.inverse === true && h.text === 'SQLite')).toBe(true)
+  await ui.press({ key: 'find-clear' })
+  expect((await ui.findAll({ type: 'Text', text: 'SQLite' })).some(h => h.props.inverse === true)).toBe(false)
+  await ui.unmount()
+
+  await runReview($, 'docs/wide.md')
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: { ...PANE_PROPS, bodyColumns: 50 }, requestId: PANE })
+  await ui.press({ key: 'find' })
+  await ui.input({ key: 'find-field', text: 'needle' })
+  expect(await ui.find({ type: 'Text', text: /^\d+–\d+\/\d+/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^1–\d+\/\d+/ })).toBeUndefined()
+  expect((await ui.findAll({ type: 'Text', text: 'needle' })).some(h => h.props.inverse === true && h.text === 'needle')).toBe(true)
+  await ui.unmount()
+})
+
+test('scrolled down, a bar of the main actions stays at the top of the pane', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  await runReview($, 'docs/plan.md')
+  let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Button', key: 'bar:next' })).toBeUndefined()
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: { ...PANE_PROPS, scroll: { offset: 12, bodyRows: 40 } }, requestId: PANE })
+  const bar = await ui.find({ type: 'Box', key: 'sticky-bar' })
+  expect(bar?.props.position).toBe('absolute')
+  expect(bar?.props.top).toBe(12)
+  await ui.press({ key: 'bar:next' })
+  expect(await ui.find({ type: 'Text', text: /block 2\/13/ })).toBeDefined()
   await ui.unmount()
 })

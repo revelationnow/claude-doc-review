@@ -50,6 +50,8 @@ const NARROW = 70
 // Up to this many blocks the pane draws them all, so the wheel reaches every
 // one; a longer document draws a window of WINDOW_HALF either side of the cursor.
 const MAX_DRAWN = 200
+/** Rows the sticky bar takes at the top of a scrolled pane: status, actions, rule. */
+const BAR_ROWS = 3
 const WINDOW_HALF = 60
 
 const docA = atom({ plugin: 'doc-review', key: 'doc' } as const, null)
@@ -307,10 +309,24 @@ function newId(prefix: string): string {
 
 // ---- actions ---------------------------------------------------------------
 
-async function setCursor($: EngineInterface, cursor: number): Promise<void> {
-  await update($, docA, d => (d && d.cursor !== cursor ? { ...d, cursor, view: 'document' as const, pan: 0 } : d))
-  void $.ui.scroll({ to: { key: `blk:${cursor}` }, in: PANE, block: 'nearest' }).catch(() => undefined)
-  void $.ui.focus({ requestId: PANE, key: `b:${cursor}` }).catch(() => undefined)
+/**
+ * Makes a block current and scrolls to it. `pan` sets how far a wide block
+ * sits sideways (0 by default); `focus: false` leaves the keyboard where it
+ * is, as the find field needs while the person types.
+ */
+async function setCursor($: EngineInterface, cursor: number, opts: { pan?: number; focus?: boolean } = {}): Promise<void> {
+  const pan = opts.pan ?? 0
+  let from = cursor
+  await update($, docA, d => {
+    if (d) from = d.cursor
+    return d && (d.cursor !== cursor || (d.pan ?? 0) !== pan) ? { ...d, cursor, view: 'document' as const, pan } : d
+  })
+  // Going up, the block lands on the window's first row, where the sticky bar
+  // covers it: reveal the mark drawn the bar's height above it instead.
+  // The first block goes back to the very top, header and all.
+  const to = cursor === 0 ? 'start' : { key: cursor < from ? `pre:${cursor}` : `blk:${cursor}` }
+  void $.ui.scroll({ to, in: PANE, block: 'nearest' }).catch(() => undefined)
+  if (opts.focus !== false) void $.ui.focus({ requestId: PANE, key: `b:${cursor}` }).catch(() => undefined)
 }
 
 async function moveCursor($: EngineInterface, delta: number | ((cursor: number, n: number) => number)): Promise<void> {
@@ -339,19 +355,80 @@ function findMatches(blocks: readonly DocReviewBlock[], query: string): number[]
   return blocks.filter(b => plainText(b.text).toLowerCase().includes(q)).map(b => b.index)
 }
 
-/** Sets the find text and moves to its first match at or after the cursor. */
+/** The columns the pane body last drew at: what a find needs to pan a wide block to its match. */
+let lastColumns = 100
+
+/** Where each occurrence of `query` sits in `text`, as [start, end) in code points, case-insensitive. */
+function occurrences(text: string, query: string): [number, number][] {
+  const q = query.toLowerCase()
+  if (q === '') return []
+  const lower = text.toLowerCase()
+  const out: [number, number][] = []
+  for (let at = lower.indexOf(q); at >= 0; at = lower.indexOf(q, at + q.length)) {
+    const from = [...text.slice(0, at)].length
+    out.push([from, from + [...text.slice(at, at + q.length)].length])
+  }
+  return out
+}
+
+/** How far to pan a table or code block so the first occurrence of `query` shows: 0 when it already does. */
+function panToMatch(block: DocReviewBlock, query: string): number {
+  const lines = unwrappedLines(block)
+  if (!lines) return 0
+  const gutter = lastColumns < NARROW ? 2 : 3
+  const room = Math.max(10, lastColumns - gutter - (block.depth ?? 0) * 2)
+  const { max } = panRange(block, room)
+  for (const line of lines) {
+    const hit = occurrences(line, query)[0]
+    if (!hit) continue
+    if (hit[1] <= room) return 0
+    return Math.max(0, Math.min(max, hit[0] - Math.floor(room / 3)))
+  }
+  return 0
+}
+
+/** Moves to match `at` of the find: pans a wide block to it. */
+async function landOnMatch($: EngineInterface, doc: DocReviewDoc, at: number, query: string, focus = true): Promise<void> {
+  const block = doc.blocks[at]
+  await setCursor($, at, { pan: block ? panToMatch(block, query) : 0, focus })
+}
+
+/** Enter in the find field: keeps the find and its match, closes the field. */
 async function runFind($: EngineInterface, query: string): Promise<void> {
   const doc = await read($, docA)
   if (!doc) return
-  const matches = findMatches(doc.blocks, query)
-  await update($, docA, d => (d ? { ...d, search: query.trim() === '' ? null : { query: query.trim(), matches } } : d))
+  const composer = await read($, composerA)
+  const origin = composer?.mode === 'find' ? composer.blockIndex : doc.cursor
+  const q = query.trim()
+  const matches = findMatches(doc.blocks, q)
+  await update($, docA, d => (d ? { ...d, search: q === '' ? null : { query: q, matches } } : d))
   await update($, composerA, () => null)
-  if (query.trim() === '') return
+  if (q === '') return
   if (matches.length === 0) {
-    $.ui.toast(`doc-review: no block contains "${query.trim()}".`)
+    $.ui.toast(`doc-review: no block contains "${q}".`)
+    await setCursor($, origin)
     return
   }
-  await setCursor($, matches.find(i => i >= doc.cursor) ?? matches[0] ?? doc.cursor)
+  await landOnMatch($, doc, nextMatchFrom(matches, origin) ?? origin, q)
+}
+
+/**
+ * Each keystroke in the find field: the matches and their highlights update,
+ * the cursor stays. A jump would scroll the field out of the window, and a
+ * focused field scrolled out of the window loses the keyboard; Enter jumps.
+ */
+async function findAsYouType($: EngineInterface, query: string): Promise<void> {
+  const doc = await read($, docA)
+  const composer = await read($, composerA)
+  if (!doc || composer?.mode !== 'find') return
+  const q = query.trim()
+  const matches = findMatches(doc.blocks, q)
+  await update($, docA, d => (d ? { ...d, search: q === '' ? null : { query: q, matches } } : d))
+}
+
+/** The match Enter in the find field goes to: the first at or after where find began. */
+function nextMatchFrom(matches: readonly number[], origin: number): number | undefined {
+  return matches.find(i => i >= origin) ?? matches[0]
 }
 
 /** `f`: opens the find field, or with a find set moves to its next match. */
@@ -361,17 +438,32 @@ async function findNext($: EngineInterface): Promise<void> {
   const composer = await read($, composerA)
   if (!doc.search || doc.search.matches.length === 0 || composer?.mode === 'find') {
     await update($, docA, d => (d ? { ...d, view: 'document' as const } : d))
-    await update($, composerA, () => ({ blockIndex: doc.cursor, mode: 'find' as const }))
+    await update($, composerA, () => ({ blockIndex: doc.cursor, mode: 'find' as const, initial: doc.search?.query ?? '' }))
     void $.ui.focus({ requestId: PANE, key: 'find-field' }).catch(() => undefined)
     return
   }
-  const after = doc.search.matches.find(i => i > doc.cursor)
-  await setCursor($, after ?? doc.search.matches[0] ?? doc.cursor)
+  const { matches, query } = doc.search
+  await landOnMatch($, doc, matches.find(i => i > doc.cursor) ?? matches[0] ?? doc.cursor, query)
+}
+
+/** `b`: the previous match, wrapping. */
+async function findPrev($: EngineInterface): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc?.search || doc.search.matches.length === 0) return
+  const { matches, query } = doc.search
+  await landOnMatch($, doc, [...matches].reverse().find(i => i < doc.cursor) ?? matches[matches.length - 1] ?? doc.cursor, query)
 }
 
 async function clearFind($: EngineInterface): Promise<void> {
   await update($, docA, d => (d ? { ...d, search: null } : d))
   await update($, composerA, c => (c?.mode === 'find' ? null : c))
+}
+
+/** The find field's cancel: drops the find; the cursor never left. */
+async function cancelFind($: EngineInterface): Promise<void> {
+  const composer = await read($, composerA)
+  await clearFind($)
+  if (composer?.mode === 'find') await setCursor($, composer.blockIndex)
 }
 
 /** `m`: the next block after the cursor that carries a comment or a question, wrapping. */
@@ -712,14 +804,49 @@ function unwrappedWidth(block: DocReviewBlock): number {
  * aligned grid) and a code block never wrap: a line wider than `room` is cut
  * at the edge, and `pan` columns scroll it right.
  */
+/**
+ * `text` from code point `from` on, as Text runs with every occurrence of
+ * `query` inverted. Never empty: a line panned past its end is one space.
+ */
+function marked(t: Table, id: string, text: string, query: string, from = 0): (string | RenderElement)[] {
+  const { Text } = t
+  const chars = [...text]
+  const out: (string | RenderElement)[] = []
+  let at = from
+  for (const [a, b] of occurrences(text, query)) {
+    if (b <= from) continue
+    const start = Math.max(a, from)
+    if (start > at) out.push(chars.slice(at, start).join(''))
+    out.push(
+      <Text key={`hit:${id}:${start}`} inverse>
+        {chars.slice(start, b).join('')}
+      </Text>,
+    )
+    at = b
+  }
+  if (at < chars.length) out.push(chars.slice(at).join(''))
+  return out.length > 0 ? out : [' ']
+}
+
 function drawBody(
   $: EngineInterface,
   t: Table,
   block: DocReviewBlock,
-  args: { room: number; pan: number; dim: boolean; isCurrent: boolean },
+  args: { room: number; pan: number; dim: boolean; isCurrent: boolean; query?: string },
 ): RenderElement {
   const { Box, Text, Button, Markdown, Code } = t
   const lines = unwrappedLines(block)
+  // Markdown has no way to mark a span, so a block holding the find's text is
+  // drawn as plain text with each occurrence inverted, while the find lasts.
+  if (!lines && args.query) {
+    const marker = block.kind === 'item' ? (/^\s*([-*+]|\d{1,3}[.)])\s/.exec(block.text)?.[1] ?? '-') + ' ' : ''
+    return (
+      <Text dimColor={args.dim} bold={block.kind === 'heading'}>
+        {marker}
+        {marked(t, `${block.index}`, plainText(block.text), args.query)}
+      </Text>
+    )
+  }
   if (!lines) return <Markdown text={capMarkdown(block.text)} dimColor={args.dim} />
 
   const language = block.kind === 'code' ? codeParts(block.text).language : undefined
@@ -729,9 +856,19 @@ function drawBody(
   const shown = lines.map(l => (args.pan > 0 ? [...l].slice(args.pan).join('') : l) || ' ')
   const isWide = width > args.room
   const range = panRange(block, args.room)
+  const query = args.query
   return (
     <Box flexDirection="column">
-      <Code source={capCode(shown.join('\n'))} {...(language ? { language } : {})} wrap="truncate-end" />
+      {query ? (
+        // The same lines, panned the same way, as text: Code cannot mark a span.
+        lines.map((line, k) => (
+          <Text key={`ln:${block.index}:${k}`} dimColor={args.dim} wrap="truncate-end">
+            {marked(t, `${block.index}:${k}`, line, query, args.pan)}
+          </Text>
+        ))
+      ) : (
+        <Code source={capCode(shown.join('\n'))} {...(language ? { language } : {})} wrap="truncate-end" />
+      )}
       {isWide && drawScrollbar($, t, { at: block.index, pan: args.pan, width, room: args.room, ...range })}
     </Box>
   )
@@ -854,6 +991,8 @@ function drawPane(
     askModel: string
     /** Where the next side question goes: this session's pick, else askModel. */
     askVia: string
+    /** The first row of the tree the pane's window shows. */
+    offset: number
   },
 ): RenderElement {
   const { t, Input, doc, comments, threads, composer, notice } = args
@@ -878,6 +1017,8 @@ function drawPane(
   const live = comments.filter(c => !c.isOrphan)
   const orphans = comments.filter(c => c.isOrphan)
   const changed = new Set(doc.changed)
+  const matched = new Set(doc.search?.matches ?? [])
+  const isFinding = composer?.mode === 'find'
   const isNarrow = args.columns < NARROW
   const gutter = isNarrow ? 2 : 3
   const roomFor = (block: DocReviewBlock) => Math.max(10, args.columns - gutter - (block.depth ?? 0) * 2)
@@ -898,6 +1039,7 @@ function drawPane(
 
     rows.push(
       <Box key={`blk:${i}`} flexDirection="column" marginBottom={isTight ? 0 : 1}>
+        <Box key={`pre:${i}`} position="absolute" top={-BAR_ROWS} left={0} width={1} height={1} />
         <Box flexDirection="row">
           <Box width={gutter}>
             <Button
@@ -914,8 +1056,9 @@ function drawPane(
             {drawBody($, t, block, {
               room: roomFor(block),
               pan: isCurrent ? (doc.pan ?? 0) : 0,
-              dim: !isCurrent && composer !== null,
+              dim: !isCurrent && composer !== null && composer.mode !== 'find',
               isCurrent,
+              ...(doc.search && matched.has(i) ? { query: doc.search.query } : {}),
             })}
           </Box>
         </Box>
@@ -1014,6 +1157,8 @@ function drawPane(
 
   return (
     <Box flexDirection="column">
+      {/* Room for the bar at the top while the find field is open. */}
+      {isFinding && Input && <Box key="find-room" height={BAR_ROWS} />}
       <Box flexDirection={isNarrow ? 'column' : 'row'} columnGap={1}>
         <Text bold>{doc.title}</Text>
         <Box flexShrink={1}>
@@ -1039,7 +1184,10 @@ function drawPane(
         <Button key="prev" plain hotkey="k" label="prev" onPress={() => void moveCursor($, -1)} />
         <Button key="top" plain hotkey="g" label="top" onPress={() => void moveCursor($, () => 0)} />
         <Button key="end" plain hotkey="e" label="end" onPress={() => void moveCursor($, (_, n) => n - 1)} />
-        <Button key="find" plain hotkey="f" label={doc.search ? 'find next' : 'find'} onPress={() => void findNext($)} />
+        <Button key="find" plain hotkey="f" label={doc.search && composer?.mode !== 'find' ? 'find next' : 'find'} onPress={() => void findNext($)} />
+        {doc.search && doc.search.matches.length > 0 && composer?.mode !== 'find' && (
+          <Button key="find-prev" plain hotkey="b" label="find prev" onPress={() => void findPrev($)} />
+        )}
         <Button key="next-comment" plain hotkey="m" label="next comment" onPress={() => void nextComment($)} />
         <Button key="comment" plain hotkey="c" label="comment" onPress={() => void compose('comment')} />
         <Button key="ask" plain hotkey="a" label="ask" onPress={() => void compose('ask')} />
@@ -1052,12 +1200,6 @@ function drawPane(
         {doc.changed.length > 0 && <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />}
         <Button key="close" plain hotkey="x" label="close" onPress={() => void $.ui.close({ id: PANE })} />
       </Box>
-      {composer?.mode === 'find' && Input && (
-        <Box flexDirection="row" gap={1} marginBottom={1}>
-          <Input key="find-field" autoFocus label="find" placeholder="text to look for in the document" submitLabel="find" value={doc.search?.query ?? ''} onSubmit={value => void runFind($, value)} />
-          <Button key="find-cancel" plain dimColor label="cancel" onPress={() => void clearFind($)} />
-        </Box>
-      )}
       {composer?.mode === 'find' && !Input && <Text dimColor>This surface has no text field for find.</Text>}
       {doc.search && composer?.mode !== 'find' && (
         <Box flexDirection="row" gap={1} marginBottom={1}>
@@ -1083,6 +1225,118 @@ function drawPane(
           ))}
         </Box>
       )}
+      {(args.offset > 0 || isFinding) &&
+        drawStickyBar($, t, {
+          offset: args.offset,
+          columns: args.columns,
+          status: `block ${Math.min(doc.cursor + 1, n)}/${n} · ${live.length} ${live.length === 1 ? 'comment' : 'comments'}${
+            doc.search
+              ? ` · find "${doc.search.query}" ${doc.search.matches.length === 0 ? 'no matches' : `${Math.max(1, doc.search.matches.indexOf(doc.cursor) + 1)}/${doc.search.matches.length}`}`
+              : ''
+          }`,
+          hasMatches: (doc.search?.matches.length ?? 0) > 0,
+          // The find field rides in the bar, so it shows wherever the pane is
+          // scrolled to, with the match Enter goes to previewed above it.
+          preview: isFinding ? findPreview(t, doc, composer?.blockIndex ?? doc.cursor, args.columns) : null,
+          finder:
+            isFinding && Input ? (
+              <Box flexDirection="row" gap={1} height={1}>
+                <Input
+                  key="find-field"
+                  autoFocus
+                  label="find"
+                  placeholder="text to look for in the document"
+                  submitLabel="done"
+                  value={composer?.initial ?? ''}
+                  onInput={value => void findAsYouType($, value)}
+                  onSubmit={value => void runFind($, value)}
+                />
+                <Button key="find-cancel" plain dimColor label="cancel" onPress={() => void cancelFind($)} />
+              </Box>
+            ) : null,
+          compose,
+          explain: () => void explain($, args.explainModel),
+          submitLabel: `submit review${live.length > 0 ? ` (${live.length})` : ''}`,
+        })}
+    </Box>
+  )
+}
+
+/** One row while typing a find: the match Enter goes to, its text around the hit marked. */
+function findPreview(t: Table, doc: DocReviewDoc, origin: number, columns: number): RenderElement {
+  const { Text } = t
+  const search = doc.search
+  if (!search) return <Text dimColor>typing finds as you go · Enter jumps to the match · cancel</Text>
+  const at = nextMatchFrom(search.matches, origin)
+  const block = at === undefined ? undefined : doc.blocks[at]
+  if (at === undefined || !block) return <Text dimColor>find "{search.query}": no matches</Text>
+  const lines = unwrappedLines(block) ?? [plainText(block.text)]
+  const line = lines.find(l => occurrences(l, search.query).length > 0) ?? lines[0] ?? ''
+  const hit = occurrences(line, search.query)[0]?.[0] ?? 0
+  const from = Math.max(0, hit - 24)
+  const head = `${search.matches.indexOf(at) + 1}/${search.matches.length} · block ${at + 1} · ${from > 0 ? '…' : ''}`
+  return (
+    <Text wrap="truncate-end">
+      <Text dimColor>{head}</Text>
+      {marked(t, 'preview', [...line].slice(from, from + columns).join('').trim(), search.query)}
+    </Text>
+  )
+}
+
+/**
+ * The pane's top rows once it is scrolled: where it is and the main actions,
+ * drawn over the document at the window's first row. The engine owns the
+ * scroll and draws again at each move, so the bar rides along. Mouse only:
+ * the hotkeys live on the header, which stays mounted above the window.
+ */
+function drawStickyBar(
+  $: EngineInterface,
+  t: Table,
+  a: {
+    offset: number
+    columns: number
+    status: string
+    hasMatches: boolean
+    /** The status row while finding: the match Enter goes to. */
+    preview: RenderElement | null
+    /** The find field, drawn in the bar while finding. */
+    finder: RenderElement | null
+    compose: (mode: 'comment' | 'ask') => unknown
+    explain: () => void
+    submitLabel: string
+  },
+): RenderElement {
+  const { Box, Text, Button } = t
+  const blank = ' '.repeat(a.columns)
+  return (
+    <Box key="sticky-bar" position="absolute" top={a.offset} left={0} width={a.columns} height={BAR_ROWS} flexDirection="column">
+      {/* Spaces first, so nothing of the document shows between the buttons. */}
+      <Box position="absolute" top={0} left={0} flexDirection="column">
+        {Array.from({ length: BAR_ROWS }, (_, k) => (
+          <Text key={`bar-blank:${k}`}>{blank}</Text>
+        ))}
+      </Box>
+      {a.preview ?? (
+        <Text dimColor wrap="truncate-end">
+          {a.status}
+        </Text>
+      )}
+      {a.finder ?? (
+      <Box flexDirection="row" columnGap={2} overflow="hidden" height={1}>
+        <Button key="bar:next" plain label="next" onPress={() => void moveCursor($, 1)} />
+        <Button key="bar:prev" plain label="prev" onPress={() => void moveCursor($, -1)} />
+        <Button key="bar:find" plain label={a.hasMatches ? 'find next' : 'find'} onPress={() => void findNext($)} />
+        {a.hasMatches && <Button key="bar:find-prev" plain label="find prev" onPress={() => void findPrev($)} />}
+        <Button key="bar:comment" plain label="comment" onPress={() => void a.compose('comment')} />
+        <Button key="bar:ask" plain label="ask" onPress={() => void a.compose('ask')} />
+        <Button key="bar:explain" plain label="explain" onPress={a.explain} />
+        <Button key="bar:submit" plain label={a.submitLabel} onPress={() => void submitReview($)} />
+        <Button key="bar:top" plain label="top" onPress={() => void moveCursor($, () => 0)} />
+      </Box>
+      )}
+      <Text dimColor wrap="truncate-end">
+        {'─'.repeat(a.columns)}
+      </Text>
     </Box>
   )
 }
@@ -1139,7 +1393,7 @@ export const register: Register = (on, options) => {
     const opened = await openDoc($, path, true)
     if (!opened.isPlaced) return { text: `the pane is not placed: ${opened.reason}` }
     return {
-      text: `Reviewing ${path}. In the pane: j/k move, f find, c comment, a ask, h explain, s submit review, o approve, d diff, x close. Tab also walks the blocks.`,
+      text: `Reviewing ${path}. In the pane: j/k move, f find (b back), c comment, a ask, h explain, s submit review, o approve, d diff, x close. Tab also walks the blocks.`,
     }
   })
 
@@ -1242,7 +1496,9 @@ export const register: Register = (on, options) => {
       read($, askViaA),
     ])
     const columns = e.props.bodyColumns ?? e.viewport?.columns ?? 80
-    const common = { doc, comments, threads, composer, notice, columns, approvePhrase, explainModel, askModel, askVia: picked ?? askModel }
+    lastColumns = columns
+    const offset = e.props.scroll?.offset ?? 0
+    const common = { doc, comments, threads, composer, notice, columns, approvePhrase, explainModel, askModel, askVia: picked ?? askModel, offset }
 
     if (e.surface === 'mobile') {
       const t = $.ui.resolve(e)
