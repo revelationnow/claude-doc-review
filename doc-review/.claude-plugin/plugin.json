@@ -1,6 +1,6 @@
 {
   "name": "doc-review",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Review design specs and implementation plans in a pane: move by block, pin comments, ask side questions, submit one review.",
   "author": {
     "name": "revelationnow",

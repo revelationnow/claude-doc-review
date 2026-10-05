@@ -1063,9 +1063,9 @@ export const register: Register = (on, options) => {
     const forget = /^forget(?:\s+(.*))?$/.exec(path)
     if (forget) {
       const target = (forget[1] ?? '').trim() || (await read($, docA))?.path || ''
-      if (target === '') return { text: `${PLUGIN}: nothing to forget. Usage: /${COMMAND} forget [path]` }
+      if (target === '') return { text: `nothing to forget. Usage: /${COMMAND} forget [path]` }
       await forgetDoc($, target)
-      return { text: `${PLUGIN}: cleared the saved comments and questions for ${target}.` }
+      return { text: `cleared the saved comments and questions for ${target}.` }
     }
 
     if (path === '') {
@@ -1073,13 +1073,13 @@ export const register: Register = (on, options) => {
       path = doc?.path ?? latest(await read($, candidatesA))?.path ?? ''
     }
     if (path === '') {
-      return { text: `${PLUGIN}: nothing to review yet. Usage: /${COMMAND} <path-to-markdown>` }
+      return { text: `nothing to review yet. Usage: /${COMMAND} <path-to-markdown>` }
     }
     if (!(await $.fs.exists(path))) {
-      return { text: `${PLUGIN}: ${path} does not exist.` }
+      return { text: `${path} does not exist.` }
     }
     const opened = await openDoc($, path, true)
-    if (!opened.isPlaced) return { text: `${PLUGIN}: the pane is not placed: ${opened.reason}` }
+    if (!opened.isPlaced) return { text: `the pane is not placed: ${opened.reason}` }
     return {
       text: `Reviewing ${path}. In the pane: j/k move, f find, c comment, a ask, h explain, s submit review, o approve, d diff, x close. Tab also walks the blocks.`,
     }
