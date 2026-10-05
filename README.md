@@ -59,10 +59,11 @@ claude plugin uninstall doc-review@claude-doc-review
 
 ## Quick start
 
-Open any markdown file for review:
+Open any markdown file for review. Type `@` to pick it with Claude Code's
+file completion instead of typing the path:
 
 ```
-/doc-review docs/superpowers/specs/2026-10-04-widgets-design.md
+/doc-review @docs/superpowers/specs/2026-10-04-widgets-design.md
 ```
 
 You can also skip the command. When a plugin such as
@@ -78,7 +79,7 @@ asks for a review, the pane opens by itself.
 | **Blocks, not lines** | Each heading, paragraph, list item (nested ones too), code fence, table and quote is a focus stop. |
 | **Tables and code never wrap** | Tables are drawn as aligned grids and code as highlighted code, both cut at the pane's edge. A scrollbar under each wide block pans it sideways with the mouse, or use `p`. |
 | **Anchored comments** | A comment remembers its heading path and opening text, so it survives revisions. If its passage is deleted, the comment is kept and marked orphaned. |
-| **Side questions** (`a`) | Answered by `model.fork` over the session's own transcript. Each answer shows its output and cached token counts. In a fresh session the question goes to the session model with the whole document attached. |
+| **Side questions** (`a`) | By default, answered by `model.fork` over the session's own transcript, so the model knows the conversation and the prefix is cached. Click `via this conversation` next to the field to send questions to `sonnet`, `haiku` or `opus` instead, which answer from the document alone. Each answer shows its output and cached token counts. In a fresh session, a forked question goes to the session model with the whole document attached. |
 | **Explain** (`h`) | A fresh small model (`haiku` by default) explains the passage in plain words. It sees only the passage and the document's title, so it costs a few hundred tokens. |
 | **Escalate** | Under each answer: *keep as comment*, *send to conversation* (with the passage attached as hidden context), or *dismiss*. |
 | **Submit or approve** | `s` sends every comment as one review. `o` sends your approval phrase and can fold unsent comments in as non-blocking notes. |
@@ -134,6 +135,7 @@ Set these in `/config` or under `pluginConfigs.doc-review` in settings.
 | `globs` | superpowers specs and plans, `docs/plans`, `docs/specs`, `*-design.md`, `*-plan.md`, `SPEC.md`, `PLAN.md` | Comma-separated globs of documents that count |
 | `offer` | `auto` | `auto` opens the pane when a review is requested. `toast` only shows a toast and status line. `off` means `/doc-review` only. |
 | `approvePhrase` | `Looks good, proceed.` | What `o` sends as your words |
+| `askModel` | `session` | Where side questions go by default. `session` forks this conversation. Any model alias or id answers from the document alone. |
 | `explainModel` | `haiku` | The model alias or id behind `h` |
 
 With `auto`, a pane that opens without a user action needs a terminal at
@@ -166,7 +168,7 @@ instead, for example while hacking on it, use one of:
 
 ```sh
 claude plugin validate doc-review   # what the engine will load and refuse
-claude plugin test doc-review       # 38 tests, no terminal needed
+claude plugin test doc-review       # 41 tests, no terminal needed
 npx -p typescript@5 tsc -p doc-review
 ```
 

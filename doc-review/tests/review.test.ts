@@ -936,3 +936,68 @@ test('every element in the pane has a key of its own, so focus lands where it is
   expect(await duplicates()).toEqual([])
   await ui.unmount()
 })
+
+test('an @-mentioned path opens the file, quoted or not', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  const plain = await runReview($, '@docs/plan.md')
+  expect(plain.text ?? '').not.toContain('does not exist')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect(await ui.find({ type: 'Text', text: /docs\/plan\.md/ })).toBeDefined()
+  await ui.unmount()
+  const quoted = await runReview($, '@"docs/plan.md"')
+  expect(quoted.text ?? '').not.toContain('does not exist')
+  const forgot = await runReview($, 'forget @docs/plan.md')
+  expect(forgot.text).toBe('cleared the saved comments and questions for docs/plan.md.')
+})
+
+test('the ask composer picks the model; any but the conversation answers from the document alone', async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  let forks = 0
+  on('model.fork', () => {
+    forks += 1
+    return { value: { isAnswered: false as const, reason: 'empty-reply' as const, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }
+  })
+  const models: string[] = []
+  on('model.complete', (_, e) => {
+    models.push(e.model)
+    return { value: { isAnswered: true as const, text: 'Because it is per user.', usage: { input_tokens: 700, output_tokens: 8, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  for (let i = 0; i < 5; i += 1) await ui.press({ key: 'next' })
+  await ui.press({ key: 'ask' })
+  expect((await ui.find({ type: 'Button', key: 'ask-via' }))?.props.label).toBe('via this conversation')
+  await ui.press({ key: 'ask-via' })
+  expect((await ui.find({ type: 'Button', key: 'ask-via' }))?.props.label).toBe('via sonnet')
+  await ui.input({ key: 'compose', text: 'Why SQLite?' })
+  expect(forks).toBe(0)
+  expect(models).toEqual(['sonnet'])
+  expect(await ui.find({ type: 'Text', text: /answered by sonnet from the document alone/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /no reply yet/ })).toBeUndefined()
+  // The choice holds for the next question.
+  await ui.press({ key: 'ask' })
+  expect((await ui.find({ type: 'Button', key: 'ask-via' }))?.props.label).toBe('via sonnet')
+  await ui.unmount()
+})
+
+test('askModel sets the default for side questions', { options: { askModel: 'haiku' } }, async ($, on) => {
+  standBeneath(on, { 'docs/plan.md': PLAN })
+  let forks = 0
+  on('model.fork', () => {
+    forks += 1
+    return { value: { isAnswered: false as const, reason: 'nothing-to-fork' as const } }
+  })
+  const models: string[] = []
+  on('model.complete', (_, e) => {
+    models.push(e.model)
+    return { value: { isAnswered: true as const, text: 'Yes.', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  await ui.press({ key: 'ask' })
+  expect((await ui.find({ type: 'Button', key: 'ask-via' }))?.props.label).toBe('via haiku')
+  await ui.input({ key: 'compose', text: 'Is this fine?' })
+  expect(forks).toBe(0)
+  expect(models).toEqual(['haiku'])
+  await ui.unmount()
+})

@@ -59,6 +59,26 @@ const composerA = atom({ plugin: 'doc-review', key: 'composer' } as const, null)
 const candidatesA = atom({ plugin: 'doc-review', key: 'candidates' } as const, [])
 const offeredA = atom({ plugin: 'doc-review', key: 'offered' } as const, [])
 const noticeA = atom({ plugin: 'doc-review', key: 'notice' } as const, null)
+const askViaA = atom({ plugin: 'doc-review', key: 'askVia' } as const, null)
+
+/** Ask through a fork of the conversation: the session's model, with the transcript cached. */
+const VIA_SESSION = 'session'
+
+/** What the ask composer's model button cycles through, the configured default first. */
+function askChoices(configured: string): string[] {
+  return [...new Set([configured, VIA_SESSION, 'sonnet', 'haiku', 'opus'])]
+}
+
+function viaLabel(via: string): string {
+  return via === VIA_SESSION ? 'via this conversation' : `via ${via}`
+}
+
+/** A path as typed, or as an @-mention completed it (`@path`, `@"path with spaces"`). */
+function argPath(raw: string): string {
+  const s = raw.trim()
+  const m = /^@"(.*)"$/.exec(s) ?? /^@(.*)$/.exec(s)
+  return (m ? m[1]! : s).trim()
+}
 
 type Table = {
   Box: ElementConstructor<BoxProps>
@@ -482,7 +502,7 @@ async function openComposer($: EngineInterface, mode: 'comment' | 'ask', blockIn
  * The composer for a surface with no text field (mobile): the engine's own
  * dialog, whose "Other" takes free text.
  */
-async function composeViaDialog($: EngineInterface, mode: 'comment' | 'ask', blockIndex?: number): Promise<void> {
+async function composeViaDialog($: EngineInterface, mode: 'comment' | 'ask', via: string, blockIndex?: number): Promise<void> {
   const doc = await read($, docA)
   if (!doc || doc.blocks.length === 0) return
   const at = blockIndex ?? doc.cursor
@@ -502,10 +522,10 @@ async function composeViaDialog($: EngineInterface, mode: 'comment' | 'ask', blo
   }
   if (answer === 'Cancel' || answer.trim() === '') return
   if (answer === other) {
-    await composeViaDialog($, mode === 'ask' ? 'comment' : 'ask', at)
+    await composeViaDialog($, mode === 'ask' ? 'comment' : 'ask', via, at)
     return
   }
-  if (mode === 'ask') await ask($, doc, block, answer.trim())
+  if (mode === 'ask') await ask($, doc, block, answer.trim(), via)
   else await addComment($, block, answer.trim())
 }
 
@@ -526,22 +546,36 @@ async function dismissThread($: EngineInterface, id: string): Promise<void> {
   await persist($)
 }
 
-async function ask($: EngineInterface, doc: DocReviewDoc, block: DocReviewBlock, question: string): Promise<void> {
+async function ask($: EngineInterface, doc: DocReviewDoc, block: DocReviewBlock, question: string, via: string): Promise<void> {
   const thread: DocReviewThread = { id: newId('t'), anchor: anchorFor(block), kind: 'ask', question, status: 'pending' }
   await update($, threadsA, list => [...list, thread])
   await update($, composerA, () => null)
 
-  // Over the conversation's own transcript first: the model already has the
-  // document in context and the prefix is cached.
-  let reply: ModelForkResult = await $.model.fork({ prompt: buildAskPrompt({ path: doc.path, block, question }) })
+  let reply: ModelForkResult
   let standaloneModel: string | undefined
-
-  // A fresh session, or one just cleared, has no reply to fork from. Then ask
-  // the session's model directly, with the whole document attached.
-  if (!reply.isAnswered && reply.reason === 'nothing-to-fork') {
-    standaloneModel = await $.session.model()
+  let alone: 'no-reply' | 'chosen' | undefined
+  const standalone = async (model: string): Promise<ModelForkResult> => {
     const { system, prompt } = buildStandaloneAskPrompt({ path: doc.path, title: doc.title, text: doc.text, block, question })
-    reply = await $.model.complete({ model: standaloneModel, system, prompt, maxTokens: 800, timeoutMs: 90000 })
+    return $.model.complete({ model, system, prompt, maxTokens: 800, timeoutMs: 90000 })
+  }
+
+  if (via === VIA_SESSION) {
+    // Over the conversation's own transcript first: the model already has the
+    // document in context and the prefix is cached.
+    reply = await $.model.fork({ prompt: buildAskPrompt({ path: doc.path, block, question }) })
+    // A fresh session, or one just cleared, has no reply to fork from. Then ask
+    // the session's model directly, with the whole document attached.
+    if (!reply.isAnswered && reply.reason === 'nothing-to-fork') {
+      standaloneModel = await $.session.model()
+      alone = 'no-reply'
+      reply = await standalone(standaloneModel)
+    }
+  } else {
+    // A fork always runs on the session's model, so another model gets the
+    // document alone: no conversation, no cached prefix.
+    standaloneModel = via
+    alone = 'chosen'
+    reply = await standalone(via)
   }
 
   await update($, threadsA, list =>
@@ -555,6 +589,7 @@ async function ask($: EngineInterface, doc: DocReviewDoc, block: DocReviewBlock,
           outputTokens: reply.usage.output_tokens,
           cachedTokens: reply.usage.cache_read_input_tokens,
           ...(standaloneModel ? { model: standaloneModel } : {}),
+          ...(alone ? { alone } : {}),
         }
       }
       const why = reply.reason === 'api-error' ? `API error${reply.status ? ` ${reply.status}` : ''} (${reply.error})` : reply.reason
@@ -815,6 +850,10 @@ function drawPane(
     columns: number
     approvePhrase: string
     explainModel: string
+    /** The configured default for side questions. */
+    askModel: string
+    /** Where the next side question goes: this session's pick, else askModel. */
+    askVia: string
   },
 ): RenderElement {
   const { t, Input, doc, comments, threads, composer, notice } = args
@@ -832,7 +871,7 @@ function drawPane(
 
   // With a text field the composer draws under the block; without one the
   // engine's dialog takes the text.
-  const compose = (mode: 'comment' | 'ask', at?: number) => (Input ? openComposer($, mode, at) : composeViaDialog($, mode, at))
+  const compose = (mode: 'comment' | 'ask', at?: number) => (Input ? openComposer($, mode, at) : composeViaDialog($, mode, args.askVia, at))
 
   const n = doc.blocks.length
   const { lo, hi } = windowOf(n, doc.cursor)
@@ -896,7 +935,11 @@ function drawPane(
             <Text color="cyan" wrap="wrap">
               {th.kind === 'explain' ? 'ⓘ' : '?'} {th.question}
               {th.kind === 'explain' && th.model ? ` (${th.model})` : ''}
-              {th.kind === 'ask' && th.model ? ` (answered by ${th.model} from the document alone: the conversation had no reply yet)` : ''}
+              {th.kind === 'ask' && th.model
+                ? th.alone === 'chosen'
+                  ? ` (answered by ${th.model} from the document alone)`
+                  : ` (answered by ${th.model} from the document alone: the conversation had no reply yet)`
+                : ''}
             </Text>
             {th.status === 'pending' && <Text dimColor>{th.kind === 'explain' ? 'explaining…' : 'asking…'}</Text>}
             {th.status === 'failed' && <Text color="red">could not ask: {th.failure ?? 'unknown'}</Text>}
@@ -926,10 +969,23 @@ function drawPane(
               onSubmit={value => {
                 const text = value.trim()
                 if (text === '') return
-                if (composer.mode === 'ask') void ask($, doc, block, text)
+                if (composer.mode === 'ask') void ask($, doc, block, text, args.askVia)
                 else void addComment($, block, text)
               }}
             />
+            {composer.mode === 'ask' && (
+              <Button
+                key="ask-via"
+                plain
+                dimColor
+                label={viaLabel(args.askVia)}
+                onPress={() => {
+                  const choices = askChoices(args.askModel)
+                  const next = choices[(choices.indexOf(args.askVia) + 1) % choices.length]!
+                  void update($, askViaA, () => next)
+                }}
+              />
+            )}
             <Button key="cancel" plain dimColor label="cancel" onPress={() => void update($, composerA, () => null)} />
           </Box>
         )}
@@ -1042,6 +1098,7 @@ export const register: Register = (on, options) => {
   const offer = String(options.offer ?? 'auto')
   const approvePhrase = String(options.approvePhrase ?? 'Looks good, proceed.')
   const explainModel = String(options.explainModel ?? 'haiku')
+  const askModel = String(options.askModel ?? VIA_SESSION).trim() || VIA_SESSION
 
   const matches = (cwd: string, path: string): boolean => {
     const rel = relativeTo(cwd, path)
@@ -1062,12 +1119,13 @@ export const register: Register = (on, options) => {
 
     const forget = /^forget(?:\s+(.*))?$/.exec(path)
     if (forget) {
-      const target = (forget[1] ?? '').trim() || (await read($, docA))?.path || ''
+      const target = argPath(forget[1] ?? '') || (await read($, docA))?.path || ''
       if (target === '') return { text: `nothing to forget. Usage: /${COMMAND} forget [path]` }
       await forgetDoc($, target)
       return { text: `cleared the saved comments and questions for ${target}.` }
     }
 
+    path = argPath(path)
     if (path === '') {
       const doc = await read($, docA)
       path = doc?.path ?? latest(await read($, candidatesA))?.path ?? ''
@@ -1175,15 +1233,16 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const [doc, comments, threads, composer, notice] = await Promise.all([
+    const [doc, comments, threads, composer, notice, picked] = await Promise.all([
       read($, docA),
       read($, commentsA),
       read($, threadsA),
       read($, composerA),
       read($, noticeA),
+      read($, askViaA),
     ])
     const columns = e.props.bodyColumns ?? e.viewport?.columns ?? 80
-    const common = { doc, comments, threads, composer, notice, columns, approvePhrase, explainModel }
+    const common = { doc, comments, threads, composer, notice, columns, approvePhrase, explainModel, askModel, askVia: picked ?? askModel }
 
     if (e.surface === 'mobile') {
       const t = $.ui.resolve(e)

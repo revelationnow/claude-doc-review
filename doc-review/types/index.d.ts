@@ -52,6 +52,8 @@ export type DocReviewThread = {
   status: 'pending' | 'answered' | 'failed'
   /** The model that answered: set for an `explain` thread, and for an `ask` answered without the conversation. */
   model?: string
+  /** Why an `ask` was answered from the document alone: the conversation had no reply yet, or the person picked another model. */
+  alone?: 'no-reply' | 'chosen'
   answer?: string
   failure?: string
   outputTokens?: number
@@ -116,6 +118,8 @@ declare module 'claude-code' {
       candidates: DocReviewCandidate[]
       offered: string[]
       notice: string | null
+      /** The model side questions go to this session, picked in the ask composer: 'session' forks the conversation. Null until picked. */
+      askVia: string | null
     }
   }
 }

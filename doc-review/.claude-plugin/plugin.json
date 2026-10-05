@@ -1,6 +1,6 @@
 {
   "name": "doc-review",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Review design specs and implementation plans in a pane: move by block, pin comments, ask side questions, submit one review.",
   "author": {
     "name": "revelationnow",
@@ -27,6 +27,12 @@
         "toast",
         "off"
       ]
+    },
+    "askModel": {
+      "type": "string",
+      "title": "Ask model",
+      "description": "Where side questions (a) go by default. 'session' forks this conversation: the session's model, with the transcript and a cached prefix. Any other model alias or id answers from the document alone. The ask field's model button switches it per session.",
+      "default": "session"
     },
     "explainModel": {
       "type": "string",
