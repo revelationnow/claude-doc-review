@@ -77,15 +77,15 @@ asks for a review, the pane opens by itself.
 | **Spots specs and plans** | A `Write` or `Edit` to a path that matches the configured globs marks the file as a candidate. When Claude's turn ends with a review request or names the file, the pane opens. |
 | **`/doc-review [path]`** | Opens any markdown file, or the latest candidate when no path is given. |
 | **Blocks, not lines** | Each heading, paragraph, list item (nested ones too), code fence, table and quote is a focus stop. |
-| **Tables and code never wrap** | Tables are drawn as aligned grids and code as highlighted code, both cut at the pane's edge. A scrollbar under each wide block pans it sideways with the mouse, or use `p`. |
+| **Tables and code never wrap** | Tables are drawn as aligned grids and code as highlighted code, both cut at the pane's edge. A scrollbar under each wide block pans it sideways with the mouse, or use `h` and `l`. |
 | **Anchored comments** | A comment remembers its heading path and opening text, so it survives revisions. If its passage is deleted, the comment is kept and marked orphaned. |
 | **Side questions** (`a`) | By default, answered by `model.fork` over the session's own transcript, so the model knows the conversation and the prefix is cached. Click `via this conversation` next to the field to send questions to `sonnet`, `haiku` or `opus` instead, which answer from the document alone. Each answer shows its output and cached token counts. In a fresh session, a forked question goes to the session model with the whole document attached. |
-| **Explain** (`h`) | A fresh small model (`haiku` by default) explains the passage in plain words. It sees only the passage and the document's title, so it costs a few hundred tokens. |
+| **Explain** (`i`) | A fresh small model (`haiku` by default) explains the passage in plain words. It sees only the passage and the document's title, so it costs a few hundred tokens. |
 | **Escalate** | Under each answer: *keep as comment*, *send to conversation* (with the passage attached as hidden context), or *dismiss*. |
-| **Submit or approve** | `s` sends every comment as one review. `o` sends your approval phrase and can fold unsent comments in as non-blocking notes. |
-| **Live refresh and diff** | When Claude edits the open file, the pane re-reads it and re-anchors comments. Changed blocks get a `+` in the margin, `n` jumps between them, and `d` shows the diff against the version you reviewed. |
+| **Submit or approve** | `s` sends every comment as one review. `y` sends your approval phrase, can fold unsent comments in as non-blocking notes, and closes the pane. |
+| **Live refresh and diff** | When Claude edits the open file, the pane re-reads it and re-anchors comments. Changed blocks get a `+` in the margin, `r` jumps between them, `v` marks the revision viewed, and `d` shows the diff against the version you reviewed. |
 | **Persistence** | Comments, answered questions and the last-reviewed text are saved per document across sessions, for the twelve most recently touched documents. `/doc-review forget [path]` clears one. |
-| **Find** | `f` opens the find field. As you type, every match in the document is highlighted and the field previews the match Enter will jump to. Enter jumps there, panning a wide table or code block to bring the match into view. Then `f` and `b` step forward and back through the matches. |
+| **Find** | `f` opens the find field. As you type, every match in the document is highlighted and the field previews the match Enter will jump to. Enter jumps there, panning a wide table or code block to bring the match into view. Then `n` and `p` step forward and back through the matches, as in `less` and vim. `f` reopens the field with the find in it; cancel keeps the old find. |
 | **Sticky bar** | Once you scroll down, a bar with your position and the main actions stays pinned to the top of the pane. |
 | **Cycle and jump** | `m` cycles through blocks that have comments. `g` and `e` jump to the top and end. |
 
@@ -98,18 +98,18 @@ Hotkeys work while the pane has the keyboard. It opens focused from
 | --- | --- |
 | `j` / `k` | Next / previous block |
 | `g` / `e` | Top / end |
-| `f` | Find; press again for the next match |
-| `b` | Previous match |
+| `h` / `l` | Pan a wide table or code block left / right |
+| `f` | Find |
+| `n` / `p` | Next / previous match |
 | `m` | Next block with a comment or question |
 | `Tab` / `Shift+Tab` | Walk the blocks and their actions |
 | `c`, or `Enter` on the current marker | Comment |
 | `a` | Ask a side question |
-| `h` | Explain on a small model |
-| `p` | Pan a wide table or code block sideways |
+| `i` | Explain on a small model |
 | `s` | Submit all comments as one review |
-| `o` | Approve |
-| `n` / `d` / `r` | Next changed block / toggle diff / mark as reviewed (shown only after a revision) |
-| `x` / `Esc` | Close the pane (comments are kept) |
+| `y` | Approve (closes the pane) |
+| `r` / `d` / `v` | Next revised block / toggle diff / mark revision viewed (shown only after a revision) |
+| `q` / `Esc` | Close the pane (comments are kept) |
 
 ## Mouse
 
@@ -138,9 +138,9 @@ Set these in `/config` or under `pluginConfigs.doc-review` in settings.
 | --- | --- | --- |
 | `globs` | superpowers specs and plans, `docs/plans`, `docs/specs`, `*-design.md`, `*-plan.md`, `SPEC.md`, `PLAN.md` | Comma-separated globs of documents that count |
 | `offer` | `auto` | `auto` opens the pane when a review is requested. `toast` only shows a toast and status line. `off` means `/doc-review` only. |
-| `approvePhrase` | `Looks good, proceed.` | What `o` sends as your words |
+| `approvePhrase` | `Looks good, proceed.` | What `y` sends as your words |
 | `askModel` | `session` | Where side questions go by default. `session` forks this conversation. Any model alias or id answers from the document alone. |
-| `explainModel` | `haiku` | The model alias or id behind `h` |
+| `explainModel` | `haiku` | The model alias or id behind `i` |
 
 With `auto`, a pane that opens without a user action needs a terminal at
 least 144 columns wide (110 once you've opened it yourself). On a narrower
@@ -172,7 +172,7 @@ instead, for example while hacking on it, use one of:
 
 ```sh
 claude plugin validate doc-review   # what the engine will load and refuse
-claude plugin test doc-review       # 45 tests, no terminal needed
+claude plugin test doc-review       # 47 tests, no terminal needed
 npx -p typescript@5 tsc -p doc-review
 ```
 

@@ -433,22 +433,25 @@ function nextMatchFrom(matches: readonly number[], origin: number): number | und
   return matches.find(i => i >= origin) ?? matches[0]
 }
 
-/** `f`: opens the find field, or with a find set moves to its next match. */
+/** `f`: opens the find field, holding the current find's text to edit or replace. */
+async function openFind($: EngineInterface): Promise<void> {
+  const doc = await read($, docA)
+  if (!doc) return
+  await update($, docA, d => (d ? { ...d, view: 'document' as const } : d))
+  await update($, composerA, () => ({ blockIndex: doc.cursor, mode: 'find' as const, initial: doc.search?.query ?? '' }))
+  void $.ui.focus({ requestId: PANE, key: 'find-field' }).catch(() => undefined)
+}
+
+/** `n`: the next match, wrapping; with no find yet, opens the field. */
 async function findNext($: EngineInterface): Promise<void> {
   const doc = await read($, docA)
   if (!doc) return
-  const composer = await read($, composerA)
-  if (!doc.search || doc.search.matches.length === 0 || composer?.mode === 'find') {
-    await update($, docA, d => (d ? { ...d, view: 'document' as const } : d))
-    await update($, composerA, () => ({ blockIndex: doc.cursor, mode: 'find' as const, initial: doc.search?.query ?? '' }))
-    void $.ui.focus({ requestId: PANE, key: 'find-field' }).catch(() => undefined)
-    return
-  }
+  if (!doc.search || doc.search.matches.length === 0) return openFind($)
   const { matches, query } = doc.search
   await landOnMatch($, doc, matches.find(i => i > doc.cursor) ?? matches[0] ?? doc.cursor, query)
 }
 
-/** `b`: the previous match, wrapping. */
+/** `p`: the previous match, wrapping. */
 async function findPrev($: EngineInterface): Promise<void> {
   const doc = await read($, docA)
   if (!doc?.search || doc.search.matches.length === 0) return
@@ -461,10 +464,16 @@ async function clearFind($: EngineInterface): Promise<void> {
   await update($, composerA, c => (c?.mode === 'find' ? null : c))
 }
 
-/** The find field's cancel: drops the find; the cursor never left. */
+/** The find field's cancel: the find held before it opened stays, or none; the cursor never left. */
 async function cancelFind($: EngineInterface): Promise<void> {
   const composer = await read($, composerA)
-  await clearFind($)
+  const before = composer?.mode === 'find' ? (composer.initial ?? '').trim() : ''
+  if (before === '') await clearFind($)
+  else {
+    // The find held before the field opened comes back, as typed edits are dropped.
+    await update($, docA, d => (d ? { ...d, search: { query: before, matches: findMatches(d.blocks, before) } } : d))
+    await update($, composerA, () => null)
+  }
   if (composer?.mode === 'find') await setCursor($, composer.blockIndex)
 }
 
@@ -483,7 +492,7 @@ async function nextComment($: EngineInterface): Promise<void> {
   await setCursor($, after ?? marked[0] ?? doc.cursor)
 }
 
-/** `h`: a plain-words explanation of a block (the current one by default) from a small, fresh model. */
+/** `i`: a plain-words explanation of a block (the current one by default) from a small, fresh model. */
 async function explain($: EngineInterface, model: string, blockIndex?: number): Promise<void> {
   const doc = await read($, docA)
   if (!doc) return
@@ -746,6 +755,8 @@ async function approve($: EngineInterface, phrase: string): Promise<void> {
   await update($, docA, d => (d ? { ...withBaseline(d, d.text), awaitingRevision: false, lastReviewAt: now } : d))
   await update($, noticeA, () => 'Approval sent.')
   await persist($)
+  // The review is over: the pane makes way for the conversation.
+  await $.ui.close({ id: PANE })
 }
 
 async function escalate($: EngineInterface, thread: DocReviewThread): Promise<void> {
@@ -958,9 +969,9 @@ function drawDiff($: EngineInterface, t: Table, doc: DocReviewDoc, notice: strin
       {notice && <Text color="green">{notice}</Text>}
       <Box flexDirection="row" flexWrap="wrap" columnGap={2} marginBottom={1}>
         <Button key="diff" plain hotkey="d" label="document" onPress={() => void toggleView($)} />
-        <Button key="next-change" plain hotkey="n" label="next change" onPress={() => void nextChange($)} />
-        <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />
-        <Button key="close" plain hotkey="x" label="close" onPress={() => void $.ui.close({ id: PANE })} />
+        <Button key="next-change" plain hotkey="r" label="next revised" onPress={() => void nextChange($)} />
+        <Button key="reviewed" plain hotkey="v" label="mark viewed" onPress={() => void markReviewed($)} />
+        <Button key="close" plain hotkey="q" label="close" onPress={() => void $.ui.close({ id: PANE })} />
       </Box>
       {!d && <Text dimColor>The two versions are too long to diff here.</Text>}
       {d && d.hunks.length === 0 && <Text dimColor>No changes since the version you reviewed.</Text>}
@@ -1004,7 +1015,7 @@ function drawPane(
     return (
       <Box flexDirection="column">
         <Text dimColor>No document open. Type /{COMMAND} &lt;path&gt; to review a markdown file.</Text>
-        <Button key="close" plain hotkey="x" label="close" onPress={() => void $.ui.close({ id: PANE })} />
+        <Button key="close" plain hotkey="q" label="close" onPress={() => void $.ui.close({ id: PANE })} />
       </Box>
     )
   }
@@ -1201,21 +1212,25 @@ function drawPane(
         <Button key="prev" plain hotkey="k" label="prev" onPress={() => void moveCursor($, -1)} />
         <Button key="top" plain hotkey="g" label="top" onPress={() => void moveCursor($, () => 0)} />
         <Button key="end" plain hotkey="e" label="end" onPress={() => void moveCursor($, (_, n) => n - 1)} />
-        <Button key="find" plain hotkey="f" label={doc.search && composer?.mode !== 'find' ? 'find next' : 'find'} onPress={() => void findNext($)} />
+        <Button key="find" plain hotkey="f" label="find" onPress={() => void openFind($)} />
         {doc.search && doc.search.matches.length > 0 && composer?.mode !== 'find' && (
-          <Button key="find-prev" plain hotkey="b" label="find prev" onPress={() => void findPrev($)} />
+          <Button key="find-next" plain hotkey="n" label="next match" onPress={() => void findNext($)} />
+        )}
+        {doc.search && doc.search.matches.length > 0 && composer?.mode !== 'find' && (
+          <Button key="find-prev" plain hotkey="p" label="prev match" onPress={() => void findPrev($)} />
         )}
         <Button key="next-comment" plain hotkey="m" label="next comment" onPress={() => void nextComment($)} />
         <Button key="comment" plain hotkey="c" label="comment" onPress={() => void compose('comment')} />
         <Button key="ask" plain hotkey="a" label="ask" onPress={() => void compose('ask')} />
-        <Button key="explain" plain hotkey="h" label="explain" onPress={() => void explain($, args.explainModel)} />
+        <Button key="explain" plain hotkey="i" label="explain" onPress={() => void explain($, args.explainModel)} />
         <Button key="submit" plain hotkey="s" label={`submit review${live.length > 0 ? ` (${live.length})` : ''}`} onPress={() => void submitReview($)} />
-        <Button key="approve" plain hotkey="o" label="approve" onPress={() => void approve($, args.approvePhrase)} />
-        {panMax > 0 && <Button key="pan" plain hotkey="p" label="pan" onPress={() => void pan($, doc.cursor, { by: panStep, cycle: true }, panMax)} />}
-        {doc.changed.length > 0 && <Button key="next-change" plain hotkey="n" label="next change" onPress={() => void nextChange($)} />}
+        <Button key="approve" plain hotkey="y" label="approve" onPress={() => void approve($, args.approvePhrase)} />
+        {panMax > 0 && <Button key="pan-back" plain hotkey="h" label="pan left" onPress={() => void pan($, doc.cursor, { by: -panStep }, panMax)} />}
+        {panMax > 0 && <Button key="pan" plain hotkey="l" label="pan right" onPress={() => void pan($, doc.cursor, { by: panStep, cycle: true }, panMax)} />}
+        {doc.changed.length > 0 && <Button key="next-change" plain hotkey="r" label="next revised" onPress={() => void nextChange($)} />}
         {doc.changed.length > 0 && <Button key="diff" plain hotkey="d" label="diff" onPress={() => void toggleView($)} />}
-        {doc.changed.length > 0 && <Button key="reviewed" plain hotkey="r" label="mark reviewed" onPress={() => void markReviewed($)} />}
-        <Button key="close" plain hotkey="x" label="close" onPress={() => void $.ui.close({ id: PANE })} />
+        {doc.changed.length > 0 && <Button key="reviewed" plain hotkey="v" label="mark viewed" onPress={() => void markReviewed($)} />}
+        <Button key="close" plain hotkey="q" label="close" onPress={() => void $.ui.close({ id: PANE })} />
       </Box>
       {composer?.mode === 'find' && !Input && <Text dimColor>This surface has no text field for find.</Text>}
       {doc.search && composer?.mode !== 'find' && (
@@ -1342,8 +1357,9 @@ function drawStickyBar(
       <Box flexDirection="row" columnGap={2} overflow="hidden" height={1}>
         <Button key="bar:next" plain label="next" onPress={() => void moveCursor($, 1)} />
         <Button key="bar:prev" plain label="prev" onPress={() => void moveCursor($, -1)} />
-        <Button key="bar:find" plain label={a.hasMatches ? 'find next' : 'find'} onPress={() => void findNext($)} />
-        {a.hasMatches && <Button key="bar:find-prev" plain label="find prev" onPress={() => void findPrev($)} />}
+        <Button key="bar:find" plain label="find" onPress={() => void openFind($)} />
+        {a.hasMatches && <Button key="bar:find-next" plain label="next match" onPress={() => void findNext($)} />}
+        {a.hasMatches && <Button key="bar:find-prev" plain label="prev match" onPress={() => void findPrev($)} />}
         <Button key="bar:comment" plain label="comment" onPress={() => void a.compose('comment')} />
         <Button key="bar:ask" plain label="ask" onPress={() => void a.compose('ask')} />
         <Button key="bar:explain" plain label="explain" onPress={a.explain} />
@@ -1410,7 +1426,7 @@ export const register: Register = (on, options) => {
     const opened = await openDoc($, path, true)
     if (!opened.isPlaced) return { text: `the pane is not placed: ${opened.reason}` }
     return {
-      text: `Reviewing ${path}. In the pane: j/k move, f find (b back), c comment, a ask, h explain, s submit review, o approve, d diff, x close. Tab also walks the blocks.`,
+      text: `Reviewing ${path}. In the pane: j/k move, f find (n/p next/prev match), c comment, a ask, i explain, s submit review, y approve, d diff, q close. Tab also walks the blocks.`,
     }
   })
 

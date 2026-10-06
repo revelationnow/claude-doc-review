@@ -54,6 +54,7 @@ function standBeneath(on: On, files: Record<string, string>, store: Record<strin
   const opened: { id: string; focus?: true }[] = []
   const submitted: { text: string; asUser?: true }[] = []
   const status: (string | undefined)[] = []
+  const closed: string[] = []
   mock.clock(on, { now: 1_700_000_000_000 })
   mock.store(on, store)
   on('session.cwd', () => ({ value: '/repo' }))
@@ -71,6 +72,10 @@ function standBeneath(on: On, files: Record<string, string>, store: Record<strin
     opened.push({ id: e.id, ...(e.focus ? { focus: true as const } : {}) })
     return { value: { isPlaced: true } }
   })
+  on('ui.close', (_, e) => {
+    closed.push(e.id)
+    return { value: undefined }
+  })
   on('ui.scroll', () => ({}))
   on('ui.focus', () => ({}))
   on('ui.status', (_, e) => {
@@ -82,7 +87,7 @@ function standBeneath(on: On, files: Record<string, string>, store: Record<strin
     submitted.push({ text: e.text, ...(e.origin?.kind === 'plugin' && e.origin.asUser ? { asUser: true as const } : {}) })
     return { text: e.text }
   })
-  return { opened, submitted, status }
+  return { opened, submitted, status, closed }
 }
 
 async function runReview($: Engine, path: string) {
@@ -273,17 +278,19 @@ test('before the conversation has a reply, ask falls back to the session model w
   await ui.unmount()
 })
 
-test('approve with no comments sends the approval phrase as the user', async ($, on) => {
-  const { submitted } = standBeneath(on, { 'docs/plan.md': PLAN })
+test('approve with no comments sends the approval phrase as the user, then closes the pane', async ($, on) => {
+  const { submitted, closed } = standBeneath(on, { 'docs/plan.md': PLAN })
   await runReview($, 'docs/plan.md')
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  expect((await ui.find({ type: 'Button', key: 'approve' }))?.props.hotkey).toBe('y')
   await ui.press({ key: 'approve' })
   expect(submitted).toEqual([{ text: 'Looks good, proceed.', asUser: true }])
+  expect(closed).toEqual([PANE])
   await ui.unmount()
 })
 
 test('approve with unsent comments asks, and can fold them in as notes', async ($, on) => {
-  const { submitted } = standBeneath(on, { 'docs/plan.md': PLAN })
+  const { submitted, closed } = standBeneath(on, { 'docs/plan.md': PLAN })
   on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
     // The dialog's result keys each answer by its question's text.
     const question = e.questions[0]?.question ?? ''
@@ -300,6 +307,43 @@ test('approve with unsent comments asks, and can fold them in as notes', async (
   expect(submitted).toHaveLength(1)
   expect(submitted[0]?.text).toStartWith('Looks good, proceed.')
   expect(submitted[0]?.text).toContain('Note: Title could name the product.')
+  expect(closed).toEqual([PANE])
+  await ui.unmount()
+})
+
+test('approve cancelled from the dialog sends nothing and leaves the pane open', async ($, on) => {
+  const { submitted, closed } = standBeneath(on, { 'docs/plan.md': PLAN })
+  on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
+    const question = e.questions[0]?.question ?? ''
+    return { result: { questions: e.questions, answers: { [question]: 'Cancel' } }, text: 'Cancel' }
+  })
+  await runReview($, 'docs/plan.md')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  await ui.press({ key: 'comment' })
+  await ui.input({ key: 'compose', text: 'Title could name the product.' })
+  await ui.press({ key: 'approve' })
+  expect(submitted).toEqual([])
+  expect(closed).toEqual([])
+  await ui.unmount()
+})
+
+test('the keys follow common bindings: q closes, n/p step through matches, r/v for revisions', async ($, on) => {
+  const files: Record<string, string> = { 'docs/plan.md': PLAN }
+  standBeneath(on, files)
+  on('tool.call', { tool: 'Write' }, (_, e) => {
+    files[e.file_path] = e.content
+    return { result: { type: 'update', filePath: e.file_path, content: e.content, structuredPatch: [] }, text: 'ok' }
+  })
+  await runReview($, 'docs/plan.md')
+  await $.tool.call({ tool: 'Write', file_path: 'docs/plan.md', content: PLAN.replace('# Widget sync plan', '# Acme widget sync plan') })
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
+  const hotkeys = Object.fromEntries((await ui.findAll({ type: 'Button' })).filter(b => b.props.hotkey).map(b => [b.key, b.props.hotkey]))
+  expect(hotkeys).toMatchObject({
+    next: 'j', prev: 'k', top: 'g', end: 'e', find: 'f', comment: 'c', ask: 'a', explain: 'i',
+    submit: 's', approve: 'y', 'next-change': 'r', diff: 'd', reviewed: 'v', close: 'q',
+  })
+  const keys = Object.values(hotkeys)
+  expect(keys.filter((k, i) => keys.indexOf(k) !== i)).toEqual([])
   await ui.unmount()
 })
 
@@ -536,13 +580,22 @@ test('f finds blocks by text, cycles through the matches, and e goes to the end'
   expect(await ui.find({ type: 'Input', key: 'find-field' })).toBeUndefined()
   // The title matches and holds the cursor, so the first match is the current block.
   expect(await ui.find({ type: 'Text', text: /find "widget" 1\/3/ })).toBeDefined()
-  await ui.press({ key: 'find' })
+  expect((await ui.find({ type: 'Button', key: 'find-next' }))?.props.hotkey).toBe('n')
+  await ui.press({ key: 'find-next' })
   expect(await ui.find({ type: 'Text', text: /block 3\/13/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /find "widget" 2\/3/ })).toBeDefined()
-  await ui.press({ key: 'find' })
+  await ui.press({ key: 'find-next' })
   expect(await ui.find({ type: 'Text', text: /block 6\/13/ })).toBeDefined()
-  await ui.press({ key: 'find' })
+  await ui.press({ key: 'find-next' })
   expect(await ui.find({ type: 'Text', text: /block 1\/13/ })).toBeDefined()
+
+  // f opens the field again holding the current find, to edit it.
+  await ui.press({ key: 'find' })
+  expect((await ui.find({ type: 'Input', key: 'find-field' }))?.props.value).toBe('widget')
+  await ui.input({ key: 'find-field', text: 'sync', kind: 'change' })
+  await ui.press({ key: 'find-cancel' })
+  // Cancel drops the edit and keeps the find that held before.
+  expect(await ui.find({ type: 'Text', text: /find "widget" / })).toBeDefined()
 
   await ui.press({ key: 'find-clear' })
   expect(await ui.find({ type: 'Text', text: /find "widget"/ })).toBeUndefined()
@@ -580,7 +633,7 @@ test('m cycles through the blocks that carry comments', async ($, on) => {
   await ui.unmount()
 })
 
-test('h explains the current block on a small fresh model, with no transcript and no escalation', async ($, on) => {
+test('i explains the current block on a small fresh model, with no transcript and no escalation', async ($, on) => {
   const { submitted } = standBeneath(on, { 'docs/plan.md': PLAN })
   const asked: { model: string; system?: string; prompt: string }[] = []
   on('model.complete', (_, e) => {
@@ -719,7 +772,7 @@ test('a table lays out as an aligned grid', () => {
   ])
 })
 
-test('tables and code never wrap: a narrow pane cuts them at the edge and p pans', async ($, on) => {
+test('tables and code never wrap: a narrow pane cuts them at the edge and h/l pan', async ($, on) => {
   const wide = `# Wide\n\n| Name | Description |\n| --- | --- |\n| sync | ${'a long cell '.repeat(8).trim()} |\n\nAfter.\n`
   standBeneath(on, { 'docs/wide.md': wide })
   await runReview($, 'docs/wide.md')
@@ -738,6 +791,9 @@ test('tables and code never wrap: a narrow pane cuts them at the edge and p pans
     expect((await ui.find({ type: 'Code' }))?.text).not.toContain('Name')
     await ui.press({ key: 'pan' })
     expect(await ui.find({ type: 'Text', text: span(55, 102, 102) })).toBeDefined()
+    await ui.press({ key: 'pan-back' })
+    expect(await ui.find({ type: 'Text', text: span(15, 62, 102) })).toBeDefined()
+    await ui.press({ key: 'pan' })
     await ui.press({ key: 'pan' })
     expect(await ui.find({ type: 'Text', text: span(1, 48, 102) })).toBeDefined()
 
@@ -1035,14 +1091,14 @@ test('find is incremental: each keystroke marks the matches and previews the nex
   await ui.unmount()
 })
 
-test('b goes back through the matches, wrapping', async ($, on) => {
+test('p goes back through the matches, wrapping', async ($, on) => {
   standBeneath(on, { 'docs/plan.md': PLAN })
   await runReview($, 'docs/plan.md')
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: PANE })
   expect(await ui.find({ type: 'Button', key: 'find-prev' })).toBeUndefined()
   await ui.press({ key: 'find' })
   await ui.input({ key: 'find-field', text: 'widget' })
-  expect((await ui.find({ type: 'Button', key: 'find-prev' }))?.props.hotkey).toBe('b')
+  expect((await ui.find({ type: 'Button', key: 'find-prev' }))?.props.hotkey).toBe('p')
   await ui.press({ key: 'find-prev' })
   expect(await ui.find({ type: 'Text', text: /find "widget" 3\/3/ })).toBeDefined()
   await ui.press({ key: 'find-prev' })
